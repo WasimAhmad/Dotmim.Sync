@@ -10,9 +10,9 @@
       },
       "Microsoft.DotNet.ILCompiler": {
         "type": "Direct",
-        "requested": "[8.0.11, )",
-        "resolved": "8.0.11",
-        "contentHash": "9SWRKJzFrE07m77G/9jSR1lqdlPmKCsQX1UflZEFBGYzmOZ53sjLEEcAiWtnWY0QJ750h2ahciOPO8oVjztQ0g=="
+        "requested": "[8.0.12, )",
+        "resolved": "8.0.12",
+        "contentHash": "zhXnz2574mBc/ocGoG+qB0BgyoK9bH7f7Te1fNQJGbpwLLwZO5KKaTBmfM8N8THb3a2vQVFonbBzQ//d15TmQQ=="
       },
       "Microsoft.EntityFrameworkCore.SqlServer": {
         "type": "Direct",
@@ -79,9 +79,9 @@
       },
       "Microsoft.NET.ILLink.Tasks": {
         "type": "Direct",
-        "requested": "[8.0.13, )",
-        "resolved": "8.0.13",
-        "contentHash": "R19ZTaRiQAK+xo9ZwaHbF/1vb1wwR1Wn5+sqp9v8+CDjbdS8R6qftKdw0VSXWKm7VAMi7P+NCU4zxDzhEWcAwQ=="
+        "requested": "[8.0.14, )",
+        "resolved": "8.0.14",
+        "contentHash": "4U2fd7PexNKrK5ZqfqIcXZj9/lRRjFsLgA/pxuFQTuGQuLYP/+7yACz/j7EmWbEj/fspOf4mafi/vHIy/rKDzQ=="
       },
       "NLog.Web.AspNetCore": {
         "type": "Direct",

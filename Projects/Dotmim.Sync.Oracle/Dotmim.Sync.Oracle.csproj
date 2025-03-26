@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFrameworks>netstandard2.1;net6.0;net7.0;net8.0</TargetFrameworks>
+		<Authors>Sébastien Pertus, Waseem Ahmad Mughal</Authors>
+		<Company>Microsoft</Company>
+		<Description>Oracle Sync Provider for Dotmim.Sync, a .NET library for database synchronization.</Description>
+		<PackageProjectUrl>https://dotmimsync.readthedocs.io/</PackageProjectUrl>
+		<PackageIcon>database.png</PackageIcon>
+		<PackageTags>Dotmim.Sync, Sync, Provider, Oracle</PackageTags>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<RepositoryUrl>https://github.com/Mimetis/Dotmim.Sync</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<Version>1.0.0</Version>
+		<LangVersion>10.0</LangVersion>
+		<Nullable>disable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Dotmim.Sync.Core\Dotmim.Sync.Core.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="..\..\docs\assets\database.png">
+			<Pack>True</Pack>
+			<PackagePath></PackagePath>
+		</None>
+		<None Include="favicon.ico">
+			<Pack>True</Pack>
+			<PackagePath></PackagePath>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Oracle.ManagedDataAccess.Core" Version="3.21.130" />
+	</ItemGroup>
+
+</Project>
