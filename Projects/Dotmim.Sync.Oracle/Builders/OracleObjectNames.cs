@@ -1,295 +1,593 @@
 using Dotmim.Sync.Builders;
+using Dotmim.Sync.DatabaseStringParsers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 
 namespace Dotmim.Sync.Oracle.Builders
 {
     /// <summary>
-    /// Generate all objects names for Oracle
+    /// Generates every object name and SQL/PL-SQL command text used by the Oracle provider.
+    /// <para>
+    /// Oracle has no table-valued parameters and cannot stream a result set out of a stored
+    /// procedure the way the framework drives commands, so — like the MySQL, SQLite and
+    /// PostgreSQL providers — every command is inline text. Row apply (update/delete) is an
+    /// anonymous PL/SQL block that reports the affected row count through the
+    /// <c>:sync_row_count</c> output bind.
+    /// </para>
     /// </summary>
     public class OracleObjectNames
     {
-        private SyncTable tableDescription;
-        private ScopeInfo scopeInfo;
-        private const string oracleMaxIdentifierLength = "30";
-        private readonly string leftQuoteIdentifier = "\"";
-        private readonly string rightQuoteIdentifier = "\"";
+        /// <summary>Left quote character used for Oracle identifiers.</summary>
+        public const char LeftQuoteChar = '"';
+
+        /// <summary>Right quote character used for Oracle identifiers.</summary>
+        public const char RightQuoteChar = '"';
 
         /// <summary>
-        /// Gets the Oracle left quote identifier.
+        /// Monotonic, UTC, epoch-based version expression. Mirrors the MySQL provider's
+        /// <c>ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(6)) * 10000)</c> (~100µs resolution) so the
+        /// same clock is used by the triggers and by <c>GetLocalTimestamp</c>.
         /// </summary>
-        public string LeftQuote => this.leftQuoteIdentifier;
+        public const string TimestampValue =
+            "ROUND(((CAST(SYS_EXTRACT_UTC(SYSTIMESTAMP) AS DATE) - DATE '1970-01-01') * 86400 " +
+            "+ TO_NUMBER(TO_CHAR(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'FF6')) / 1000000) * 10000)";
+
+        /// <summary>UTC "now" expression for the last_change_datetime tracking column.</summary>
+        public const string NowValue = "SYS_EXTRACT_UTC(SYSTIMESTAMP)";
+
+        private readonly SyncTable tableDescription;
+        private readonly ScopeInfo scopeInfo;
 
         /// <summary>
-        /// Gets the Oracle right quote identifier.
-        /// </summary>
-        public string RightQuote => this.rightQuoteIdentifier;
-
-        /// <summary>
-        /// Get the Oracle QUOTED FULL table name
-        /// </summary>
-        public string QuotedTableName
-        {
-            get
-            {
-                var tblName = this.tableDescription.TableName;
-                var schemaName = this.tableDescription.SchemaName;
-
-                if (string.IsNullOrEmpty(schemaName))
-                    return $"{leftQuoteIdentifier}{tblName}{rightQuoteIdentifier}";
-                else
-                    return $"{leftQuoteIdentifier}{schemaName}{rightQuoteIdentifier}.{leftQuoteIdentifier}{tblName}{rightQuoteIdentifier}";
-            }
-        }
-
-        /// <summary>
-        /// Get the Oracle tracking quoted FULL table name
-        /// </summary>
-        public string QuotedTrackingTableName
-        {
-            get
-            {
-                var tblName = this.TrackingTableName;
-                var schemaName = this.tableDescription.SchemaName;
-
-                if (string.IsNullOrEmpty(schemaName))
-                    return $"{leftQuoteIdentifier}{tblName}{rightQuoteIdentifier}";
-                else
-                    return $"{leftQuoteIdentifier}{schemaName}{rightQuoteIdentifier}.{leftQuoteIdentifier}{tblName}{rightQuoteIdentifier}";
-            }
-        }
-
-        /// <summary>
-        /// Get the Oracle tracking table name (not quoted, not full)
-        /// </summary>
-        public string TrackingTableName => GetTrackingTableName(this.tableDescription.TableName);
-
-        /// <summary>
-        /// Create an instance of OracleObjectNames.
+        /// Initializes a new instance of the <see cref="OracleObjectNames"/> class.
         /// </summary>
         public OracleObjectNames(SyncTable tableDescription, ScopeInfo scopeInfo)
         {
             this.tableDescription = tableDescription;
             this.scopeInfo = scopeInfo;
+
+            var tableParser = new TableParser(tableDescription.GetFullName(), LeftQuoteChar, RightQuoteChar);
+
+            this.TableName = tableParser.TableName;
+            this.TableQuotedShortName = tableParser.QuotedShortName;
+            this.TableQuotedFullName = tableParser.QuotedFullName;
+            this.TableSchemaName = tableParser.SchemaName;
+
+            // Tracking table name: <prefix><table><suffix> (default suffix "_tracking"), optionally schema-qualified.
+            var trackingTableNameString =
+                string.IsNullOrEmpty(this.scopeInfo.Setup?.TrackingTablesPrefix) && string.IsNullOrEmpty(this.scopeInfo.Setup?.TrackingTablesSuffix)
+                    ? $"{tableDescription.TableName}_tracking"
+                    : $"{this.scopeInfo.Setup?.TrackingTablesPrefix}{tableDescription.TableName}{this.scopeInfo.Setup?.TrackingTablesSuffix}";
+
+            if (!string.IsNullOrEmpty(tableDescription.SchemaName))
+                trackingTableNameString = $"{tableDescription.SchemaName}.{trackingTableNameString}";
+
+            var trackingTableParser = new TableParser(trackingTableNameString, LeftQuoteChar, RightQuoteChar);
+
+            this.TrackingTableName = trackingTableParser.TableName;
+            this.TrackingTableQuotedShortName = trackingTableParser.QuotedShortName;
+            this.TrackingTableQuotedFullName = trackingTableParser.QuotedFullName;
         }
 
+        /// <summary>Gets the left quote string.</summary>
+        public string LeftQuote => "\"";
+
+        /// <summary>Gets the right quote string.</summary>
+        public string RightQuote => "\"";
+
+        /// <summary>Gets the unquoted table name.</summary>
+        public string TableName { get; }
+
+        /// <summary>Gets the quoted short table name (without schema).</summary>
+        public string TableQuotedShortName { get; }
+
+        /// <summary>Gets the quoted full table name (with schema, if any).</summary>
+        public string TableQuotedFullName { get; }
+
+        /// <summary>Gets the parsed table schema name (may be empty).</summary>
+        public string TableSchemaName { get; }
+
+        /// <summary>Gets the unquoted tracking table name.</summary>
+        public string TrackingTableName { get; }
+
+        /// <summary>Gets the quoted short tracking table name (without schema).</summary>
+        public string TrackingTableQuotedShortName { get; }
+
+        /// <summary>Gets the quoted full tracking table name (with schema, if any).</summary>
+        public string TrackingTableQuotedFullName { get; }
+
+        /// <summary>Gets the full quoted table name (alias retained for compatibility).</summary>
+        public string QuotedTableName => this.TableQuotedFullName;
+
+        /// <summary>Gets the full quoted tracking table name (alias retained for compatibility).</summary>
+        public string QuotedTrackingTableName => this.TrackingTableQuotedFullName;
+
         /// <summary>
-        /// Get the name of the tracking table for a given table name
+        /// Oracle does not use stored procedures in this provider (everything is inline text).
+        /// Returned for API compatibility only.
         /// </summary>
-        public static string GetTrackingTableName(string tableName)
-        {
-            string trackingName = $"{tableName.ToUpperInvariant()}_TRACK";
-            
-            // Oracle identifiers are limited to 30 characters
-            if (trackingName.Length > 30)
-                trackingName = trackingName.Substring(0, 30);
-            
-            return trackingName;
-        }
+        public string GetStoredProcedureCommandName(DbStoredProcedureType storedProcedureType, SyncFilter filter = null) => null;
 
         /// <summary>
-        /// Gets the Oracle stored procedure name
-        /// </summary>
-        public string GetStoredProcedureCommandName(DbStoredProcedureType storedProcedureType, SyncFilter filter = null)
-        {
-            string command;
-            switch (storedProcedureType)
-            {
-                case DbStoredProcedureType.SelectChanges:
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_SELECTCHANGES";
-                    break;
-                case DbStoredProcedureType.SelectInitializedChanges:
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_SELECTINITCHANGES";
-                    break;
-                case DbStoredProcedureType.SelectChangesWithFilters:
-                    if (filter == null)
-                        throw new ArgumentNullException(nameof(filter), "Filter is required for SelectChangesWithFilters stored procedure");
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_SELECTCHANGES_{filter.GetFilterName()}";
-                    break;
-                case DbStoredProcedureType.SelectInitializedChangesWithFilters:
-                    if (filter == null)
-                        throw new ArgumentNullException(nameof(filter), "Filter is required for SelectInitializedChangesWithFilters stored procedure");
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_SELECTINITCHANGES_{filter.GetFilterName()}";
-                    break;
-                case DbStoredProcedureType.UpdateRow:
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_UPDATE";
-                    break;
-                case DbStoredProcedureType.DeleteRow:
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_DELETE";
-                    break;
-                case DbStoredProcedureType.Reset:
-                    command = $"{this.tableDescription.TableName.ToUpperInvariant()}_RESET";
-                    break;
-                case DbStoredProcedureType.BulkTableType:
-                case DbStoredProcedureType.BulkUpdateRows:
-                case DbStoredProcedureType.BulkDeleteRows:
-                    // Oracle doesn't support table-valued parameters, so we don't need these procedures
-                    return string.Empty;
-                default:
-                    throw new ArgumentException($"Stored procedure type {storedProcedureType} is not supported");
-            }
-
-            // Oracle identifiers are limited to 30 characters
-            if (command.Length > 30)
-                command = command.Substring(0, 30);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets the SQL command text for various operations
-        /// </summary>
-        public string GetCommandName(DbCommandType commandType, SyncFilter filter = null)
-        {
-            switch (commandType)
-            {
-                case DbCommandType.SelectRow:
-                    return GetSelectRowCommandText();
-                case DbCommandType.DisableConstraints:
-                    return GetDisableConstraintsCommandText();
-                case DbCommandType.EnableConstraints:
-                    return GetEnableConstraintsCommandText();
-                case DbCommandType.DeleteMetadata:
-                    return GetDeleteMetadataCommandText();
-                case DbCommandType.UpdateUntrackedRows:
-                    return GetUpdateUntrackedRowsCommandText();
-                case DbCommandType.Reset:
-                    return GetResetCommandText();
-                default:
-                    throw new ArgumentException($"Command type {commandType} is not supported in GetCommandName");
-            }
-        }
-
-        /// <summary>
-        /// Gets the Oracle trigger command text
+        /// Gets the (unquoted) trigger name for the given trigger type.
         /// </summary>
         public string GetTriggerCommandName(DbTriggerType triggerType)
         {
-            var triggerName = $"{this.tableDescription.TableName}_TRRIG_{triggerType.ToString().ToUpperInvariant()}";
-            
-            // Oracle identifiers are limited to 30 characters
-            if (triggerName.Length > 30)
-                triggerName = triggerName.Substring(0, 30);
-            
-            return triggerName;
+            var prefix = this.scopeInfo.Setup?.TriggersPrefix;
+            var suffix = this.scopeInfo.Setup?.TriggersSuffix;
+            var name = triggerType switch
+            {
+                DbTriggerType.Insert => $"{prefix}{this.tableDescription.TableName}{suffix}_insert_trigger",
+                DbTriggerType.Update => $"{prefix}{this.tableDescription.TableName}{suffix}_update_trigger",
+                DbTriggerType.Delete => $"{prefix}{this.tableDescription.TableName}{suffix}_delete_trigger",
+                _ => throw new ArgumentOutOfRangeException(nameof(triggerType)),
+            };
+
+            return name;
         }
 
-        private string GetSelectRowCommandText()
+        /// <summary>
+        /// Returns the inline command text for a given command type.
+        /// </summary>
+        public string GetCommandText(DbCommandType commandType, SyncFilter filter = null)
         {
-            var stringBuilder = new System.Text.StringBuilder();
-            stringBuilder.AppendLine($"SELECT * FROM {this.QuotedTableName}");
-            stringBuilder.Append("WHERE ");
-
-            string and = string.Empty;
-            foreach (var pkColumn in this.tableDescription.GetPrimaryKeysColumns())
+            return commandType switch
             {
-                stringBuilder.Append($"{and}{leftQuoteIdentifier}{pkColumn.ColumnName}{rightQuoteIdentifier} = :{pkColumn.ColumnName}");
+                DbCommandType.SelectChanges or DbCommandType.SelectChangesWithFilters => this.CreateSelectIncrementalChangesCommand(filter),
+                DbCommandType.SelectInitializedChanges or DbCommandType.SelectInitializedChangesWithFilters => this.CreateSelectInitializedChangesCommand(filter),
+                DbCommandType.SelectRow => this.CreateSelectRowCommand(),
+                DbCommandType.UpdateRow or DbCommandType.InsertRow or DbCommandType.UpdateRows or DbCommandType.InsertRows => this.CreateUpdateCommand(),
+                DbCommandType.DeleteRow or DbCommandType.DeleteRows => this.CreateDeleteCommand(),
+                DbCommandType.DeleteMetadata => this.CreateDeleteMetadataCommand(),
+                DbCommandType.Reset => this.CreateResetCommand(),
+                DbCommandType.UpdateUntrackedRows => this.CreateUpdateUntrackedRowsCommand(),
+                DbCommandType.DisableConstraints => this.CreateDisableConstraintsCommand(),
+                DbCommandType.EnableConstraints => this.CreateEnableConstraintsCommand(),
+                _ => throw new NotSupportedException($"Command type {commandType} is not supported by the Oracle provider as inline text."),
+            };
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Identifier / clause helpers
+        // ----------------------------------------------------------------------------------------
+        private static string Quoted(string columnName) => $"\"{columnName}\"";
+
+        private static string BindName(string columnName)
+            => new ObjectParser(columnName, LeftQuoteChar, RightQuoteChar).NormalizedShortName;
+
+        private string PrimaryKeyWhere(string tableAlias, string bindPrefix)
+        {
+            var and = string.Empty;
+            var sb = new StringBuilder();
+            foreach (var pk in this.tableDescription.GetPrimaryKeysColumns())
+            {
+                var alias = string.IsNullOrEmpty(tableAlias) ? string.Empty : $"{tableAlias}.";
+                sb.Append($"{and}{alias}{Quoted(pk.ColumnName)} = {bindPrefix}{BindName(pk.ColumnName)}");
                 and = " AND ";
             }
 
+            return sb.ToString();
+        }
+
+        private string PrimaryKeyJoin(string leftAlias, string rightAlias)
+            => string.Join(" AND ", this.tableDescription.GetPrimaryKeysColumns()
+                .Select(pk => $"{leftAlias}.{Quoted(pk.ColumnName)} = {rightAlias}.{Quoted(pk.ColumnName)}"));
+
+        // ----------------------------------------------------------------------------------------
+        // Select changes / initialized changes / row
+        // ----------------------------------------------------------------------------------------
+        private string CreateSelectIncrementalChangesCommand(SyncFilter filter = null)
+        {
+            var stringBuilder = new StringBuilder(filter == null ? "SELECT " : "SELECT DISTINCT ");
+
+            foreach (var column in this.tableDescription.GetMutableColumns(false, true))
+            {
+                var isPk = this.tableDescription.PrimaryKeys.Any(pk => column.ColumnName.Equals(pk, SyncGlobalization.DataSourceStringComparison));
+                stringBuilder.AppendLine($"\t{(isPk ? "side" : "base")}.{Quoted(column.ColumnName)}, ");
+            }
+
+            stringBuilder.AppendLine("\tside.\"sync_row_is_tombstone\" as \"sync_row_is_tombstone\", ");
+            stringBuilder.AppendLine("\tside.\"update_scope_id\" as \"sync_update_scope_id\" ");
+            stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
+            stringBuilder.Append($"RIGHT JOIN {this.TrackingTableQuotedFullName} side ON ");
+            stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+            stringBuilder.AppendLine("WHERE (");
+
+            if (filter != null)
+                this.AppendFilterWhere(stringBuilder, filter);
+
+            stringBuilder.AppendLine("\tside.\"timestamp\" > :sync_min_timestamp");
+            stringBuilder.AppendLine("\tAND (side.\"update_scope_id\" <> :sync_scope_id OR side.\"update_scope_id\" IS NULL)");
+            stringBuilder.AppendLine(")");
+
             return stringBuilder.ToString();
         }
 
-        private string GetDisableConstraintsCommandText()
+        private string CreateSelectInitializedChangesCommand(SyncFilter filter = null)
         {
-            var stringBuilder = new System.Text.StringBuilder();
-            
-            // Oracle approach to disable constraints is to use the ALTER TABLE command with DISABLE CONSTRAINT
-            stringBuilder.AppendLine($"BEGIN");
-            
-            // Get all foreign key constraints that reference this table
-            stringBuilder.AppendLine($"  FOR c IN (SELECT c.constraint_name, c.table_name");
-            stringBuilder.AppendLine($"            FROM user_constraints c");
-            stringBuilder.AppendLine($"            JOIN user_constraints r ON c.r_constraint_name = r.constraint_name");
-            stringBuilder.AppendLine($"            WHERE r.table_name = '{this.tableDescription.TableName}'");
-            stringBuilder.AppendLine($"            AND c.constraint_type = 'R')");
-            stringBuilder.AppendLine($"  LOOP");
-            stringBuilder.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" DISABLE CONSTRAINT \"' || c.constraint_name || '\"';");
-            stringBuilder.AppendLine($"  END LOOP;");
-            
-            // Get foreign key constraints on this table
-            stringBuilder.AppendLine($"  FOR c IN (SELECT constraint_name");
-            stringBuilder.AppendLine($"            FROM user_constraints");
-            stringBuilder.AppendLine($"            WHERE table_name = '{this.tableDescription.TableName}'");
-            stringBuilder.AppendLine($"            AND constraint_type = 'R')");
-            stringBuilder.AppendLine($"  LOOP");
-            stringBuilder.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.QuotedTableName} DISABLE CONSTRAINT \"' || c.constraint_name || '\"';");
-            stringBuilder.AppendLine($"  END LOOP;");
-            
-            stringBuilder.AppendLine($"END;");
-            
+            var stringBuilder = new StringBuilder(filter == null ? "SELECT " : "SELECT DISTINCT ");
+
+            var comma = "  ";
+            foreach (var column in this.tableDescription.GetMutableColumns(false, true))
+            {
+                stringBuilder.AppendLine($"\t{comma}base.{Quoted(column.ColumnName)}");
+                comma = ", ";
+            }
+
+            stringBuilder.AppendLine("\t, side.\"sync_row_is_tombstone\" as \"sync_row_is_tombstone\"");
+            stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
+            stringBuilder.Append($"LEFT JOIN {this.TrackingTableQuotedFullName} side ON ");
+            stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+            stringBuilder.AppendLine("WHERE (");
+
+            if (filter != null)
+                this.AppendFilterWhere(stringBuilder, filter);
+
+            stringBuilder.AppendLine("\t(side.\"timestamp\" > :sync_min_timestamp OR :sync_min_timestamp IS NULL)");
+            stringBuilder.AppendLine(")");
+
+            // Union the recent tombstones so deletions are part of the snapshot.
+            stringBuilder.AppendLine("UNION");
+            stringBuilder.AppendLine("SELECT ");
+            comma = "  ";
+            foreach (var column in this.tableDescription.GetMutableColumns(false, true))
+            {
+                var isPk = this.tableDescription.PrimaryKeys.Any(pk => column.ColumnName.Equals(pk, SyncGlobalization.DataSourceStringComparison));
+                stringBuilder.AppendLine($"\t{comma}{(isPk ? "side" : "base")}.{Quoted(column.ColumnName)}");
+                comma = ", ";
+            }
+
+            stringBuilder.AppendLine("\t, side.\"sync_row_is_tombstone\" as \"sync_row_is_tombstone\"");
+            stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
+            stringBuilder.Append($"RIGHT JOIN {this.TrackingTableQuotedFullName} side ON ");
+            stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+            stringBuilder.AppendLine("WHERE (side.\"timestamp\" > :sync_min_timestamp AND side.\"sync_row_is_tombstone\" = 1)");
+
             return stringBuilder.ToString();
         }
 
-        private string GetEnableConstraintsCommandText()
+        private string CreateSelectRowCommand()
         {
-            var stringBuilder = new System.Text.StringBuilder();
-            
-            // Oracle approach to enable constraints is to use the ALTER TABLE command with ENABLE CONSTRAINT
-            stringBuilder.AppendLine($"BEGIN");
-            
-            // Enable foreign key constraints on this table first
-            stringBuilder.AppendLine($"  FOR c IN (SELECT constraint_name");
-            stringBuilder.AppendLine($"            FROM user_constraints");
-            stringBuilder.AppendLine($"            WHERE table_name = '{this.tableDescription.TableName}'");
-            stringBuilder.AppendLine($"            AND constraint_type = 'R')");
-            stringBuilder.AppendLine($"  LOOP");
-            stringBuilder.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.QuotedTableName} ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
-            stringBuilder.AppendLine($"  END LOOP;");
-            
-            // Then enable all foreign key constraints that reference this table
-            stringBuilder.AppendLine($"  FOR c IN (SELECT c.constraint_name, c.table_name");
-            stringBuilder.AppendLine($"            FROM user_constraints c");
-            stringBuilder.AppendLine($"            JOIN user_constraints r ON c.r_constraint_name = r.constraint_name");
-            stringBuilder.AppendLine($"            WHERE r.table_name = '{this.tableDescription.TableName}'");
-            stringBuilder.AppendLine($"            AND c.constraint_type = 'R')");
-            stringBuilder.AppendLine($"  LOOP");
-            stringBuilder.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
-            stringBuilder.AppendLine($"  END LOOP;");
-            
-            stringBuilder.AppendLine($"END;");
-            
+            var stringBuilder = new StringBuilder("SELECT ");
+            stringBuilder.AppendLine();
+
+            foreach (var column in this.tableDescription.GetMutableColumns(false, true))
+            {
+                var isPk = this.tableDescription.PrimaryKeys.Any(pk => column.ColumnName.Equals(pk, SyncGlobalization.DataSourceStringComparison));
+                stringBuilder.AppendLine($"\t{(isPk ? "side" : "base")}.{Quoted(column.ColumnName)}, ");
+            }
+
+            stringBuilder.AppendLine("\tside.\"sync_row_is_tombstone\" as \"sync_row_is_tombstone\", ");
+            stringBuilder.AppendLine("\tside.\"update_scope_id\" as \"sync_update_scope_id\"");
+            stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
+            stringBuilder.Append($"RIGHT JOIN {this.TrackingTableQuotedFullName} side ON ");
+            stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+            stringBuilder.Append("WHERE ");
+            stringBuilder.Append(this.PrimaryKeyWhere("side", ":"));
+
             return stringBuilder.ToString();
         }
 
-        private string GetDeleteMetadataCommandText()
+        // ----------------------------------------------------------------------------------------
+        // Apply row : update (upsert) / delete as anonymous PL/SQL blocks
+        // ----------------------------------------------------------------------------------------
+        private string CreateUpdateCommand()
         {
-            return $"DELETE FROM {this.QuotedTrackingTableName} WHERE {leftQuoteIdentifier}sync_row_is_tombstone{rightQuoteIdentifier} = 1";
+            var writableColumns = this.tableDescription.Columns.Where(c => !c.IsReadOnly).ToList();
+            var mutableColumns = this.tableDescription.GetMutableColumns(false, false).ToList();
+            var hasMutableColumns = mutableColumns.Count > 0;
+
+            const string guard = "(v_ts IS NULL OR v_ts <= :sync_min_timestamp OR v_scope = :sync_scope_id OR :sync_force_write = 1)";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("DECLARE");
+            sb.AppendLine("  v_ts NUMBER;");
+            sb.AppendLine("  v_scope RAW(16);");
+            sb.AppendLine("  v_count NUMBER := 0;");
+            sb.AppendLine("BEGIN");
+            sb.AppendLine("  BEGIN");
+            sb.AppendLine($"    SELECT \"timestamp\", \"update_scope_id\" INTO v_ts, v_scope");
+            sb.AppendLine($"    FROM {this.TrackingTableQuotedFullName}");
+            sb.AppendLine($"    WHERE {this.PrimaryKeyWhere(string.Empty, ":")} AND ROWNUM = 1;");
+            sb.AppendLine("  EXCEPTION WHEN NO_DATA_FOUND THEN v_ts := NULL; v_scope := NULL; END;");
+            sb.AppendLine();
+
+            if (hasMutableColumns)
+            {
+                var setClause = string.Join(", ", mutableColumns.Select(c => $"{Quoted(c.ColumnName)} = :{BindName(c.ColumnName)}"));
+                sb.AppendLine($"  UPDATE {this.TableQuotedFullName} SET {setClause}");
+                sb.AppendLine($"  WHERE {this.PrimaryKeyWhere(string.Empty, ":")} AND {guard};");
+                sb.AppendLine("  v_count := SQL%ROWCOUNT;");
+                sb.AppendLine();
+                sb.AppendLine("  IF v_count = 0 THEN");
+                this.AppendGuardedInsert(sb, writableColumns, guard, "    ");
+                sb.AppendLine("  END IF;");
+            }
+            else
+            {
+                this.AppendGuardedInsert(sb, writableColumns, guard, "  ");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("  IF v_count > 0 THEN");
+            this.AppendTrackingMerge(sb, tombstone: 0, scopeBind: ":sync_scope_id", indent: "    ");
+            sb.AppendLine("  END IF;");
+            sb.AppendLine("  :sync_row_count := v_count;");
+            sb.AppendLine("END;");
+
+            return sb.ToString();
         }
 
-        private string GetUpdateUntrackedRowsCommandText()
+        private string CreateDeleteCommand()
         {
-            return $@"MERGE INTO {this.QuotedTrackingTableName} t
-                     USING (
-                         SELECT p.*, :sync_min_timestamp as sync_min_timestamp 
-                         FROM {this.QuotedTableName} p
-                         LEFT JOIN {this.QuotedTrackingTableName} t ON {this.GetPrimaryKeyJoinClause("p", "t")}
-                         WHERE t.{leftQuoteIdentifier}update_scope_id{rightQuoteIdentifier} IS NULL
-                     ) s
-                     ON ({this.GetPrimaryKeyJoinClause("s", "t")})
-                     WHEN NOT MATCHED THEN
-                         INSERT ({string.Join(", ", this.tableDescription.PrimaryKeys.Select(pk => $"{leftQuoteIdentifier}{pk}{rightQuoteIdentifier}"))},
-                                 {leftQuoteIdentifier}update_scope_id{rightQuoteIdentifier},
-                                 {leftQuoteIdentifier}sync_row_is_tombstone{rightQuoteIdentifier},
-                                 {leftQuoteIdentifier}update_timestamp{rightQuoteIdentifier},
-                                 {leftQuoteIdentifier}last_change_datetime{rightQuoteIdentifier})
-                         VALUES ({string.Join(", ", this.tableDescription.PrimaryKeys.Select(pk => $"s.{leftQuoteIdentifier}{pk}{rightQuoteIdentifier}"))},
-                                NULL, 
-                                0, 
-                                s.sync_min_timestamp, 
-                                SYSDATE)";
+            const string guard = "(v_ts IS NULL OR v_ts <= :sync_min_timestamp OR v_scope = :sync_scope_id OR :sync_force_write = 1)";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("DECLARE");
+            sb.AppendLine("  v_ts NUMBER;");
+            sb.AppendLine("  v_scope RAW(16);");
+            sb.AppendLine("  v_count NUMBER := 0;");
+            sb.AppendLine("BEGIN");
+            sb.AppendLine("  BEGIN");
+            sb.AppendLine($"    SELECT \"timestamp\", \"update_scope_id\" INTO v_ts, v_scope");
+            sb.AppendLine($"    FROM {this.TrackingTableQuotedFullName}");
+            sb.AppendLine($"    WHERE {this.PrimaryKeyWhere(string.Empty, ":")} AND ROWNUM = 1;");
+            sb.AppendLine("  EXCEPTION WHEN NO_DATA_FOUND THEN v_ts := NULL; v_scope := NULL; END;");
+            sb.AppendLine();
+            sb.AppendLine($"  DELETE FROM {this.TableQuotedFullName}");
+            sb.AppendLine($"  WHERE {this.PrimaryKeyWhere(string.Empty, ":")} AND {guard};");
+            sb.AppendLine("  v_count := SQL%ROWCOUNT;");
+            sb.AppendLine();
+            sb.AppendLine("  IF v_count > 0 THEN");
+            this.AppendTrackingMerge(sb, tombstone: 1, scopeBind: ":sync_scope_id", indent: "    ");
+            sb.AppendLine("  END IF;");
+            sb.AppendLine("  :sync_row_count := v_count;");
+            sb.AppendLine("END;");
+
+            return sb.ToString();
         }
 
-        private string GetResetCommandText()
+        private void AppendGuardedInsert(StringBuilder sb, IReadOnlyList<SyncColumn> writableColumns, string guard, string indent)
         {
-            return $"TRUNCATE TABLE {this.QuotedTrackingTableName}";
+            var columnList = string.Join(", ", writableColumns.Select(c => Quoted(c.ColumnName)));
+            var valueList = string.Join(", ", writableColumns.Select(c => $":{BindName(c.ColumnName)}"));
+
+            sb.AppendLine($"{indent}BEGIN");
+            sb.AppendLine($"{indent}  INSERT INTO {this.TableQuotedFullName} ({columnList})");
+            sb.AppendLine($"{indent}  SELECT {valueList} FROM DUAL WHERE {guard};");
+            sb.AppendLine($"{indent}  v_count := SQL%ROWCOUNT;");
+            sb.AppendLine($"{indent}EXCEPTION WHEN DUP_VAL_ON_INDEX THEN v_count := 0; END;");
         }
 
-        private string GetPrimaryKeyJoinClause(string leftAlias, string rightAlias)
+        private void AppendTrackingMerge(StringBuilder sb, int tombstone, string scopeBind, string indent)
         {
-            return string.Join(" AND ", this.tableDescription.PrimaryKeys.Select(pk => 
-                $"{leftAlias}.{leftQuoteIdentifier}{pk}{rightQuoteIdentifier} = {rightAlias}.{leftQuoteIdentifier}{pk}{rightQuoteIdentifier}"));
+            var pkColumns = this.tableDescription.GetPrimaryKeysColumns().ToList();
+            var pkList = string.Join(", ", pkColumns.Select(c => Quoted(c.ColumnName)));
+            var pkValues = string.Join(", ", pkColumns.Select(c => $":{BindName(c.ColumnName)}"));
+
+            sb.AppendLine($"{indent}MERGE INTO {this.TrackingTableQuotedFullName} t USING DUAL ON ({this.PrimaryKeyWhere("t", ":")})");
+            sb.AppendLine($"{indent}WHEN MATCHED THEN UPDATE SET");
+            sb.AppendLine($"{indent}  t.\"update_scope_id\" = {scopeBind},");
+            sb.AppendLine($"{indent}  t.\"sync_row_is_tombstone\" = {tombstone},");
+            sb.AppendLine($"{indent}  t.\"timestamp\" = {TimestampValue},");
+            sb.AppendLine($"{indent}  t.\"last_change_datetime\" = {NowValue}");
+            sb.AppendLine($"{indent}WHEN NOT MATCHED THEN INSERT ({pkList}, \"update_scope_id\", \"sync_row_is_tombstone\", \"timestamp\", \"last_change_datetime\")");
+            sb.AppendLine($"{indent}  VALUES ({pkValues}, {scopeBind}, {tombstone}, {TimestampValue}, {NowValue});");
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Metadata / reset / untracked / constraints
+        // ----------------------------------------------------------------------------------------
+        private string CreateDeleteMetadataCommand()
+            => $"DELETE FROM {this.TrackingTableQuotedFullName} WHERE \"timestamp\" <= :sync_row_timestamp";
+
+        private string CreateResetCommand()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("BEGIN");
+            sb.AppendLine($"  DELETE FROM {this.TableQuotedFullName};");
+            sb.AppendLine($"  DELETE FROM {this.TrackingTableQuotedFullName};");
+            sb.AppendLine("  :sync_row_count := SQL%ROWCOUNT;");
+            sb.AppendLine("END;");
+            return sb.ToString();
+        }
+
+        private string CreateUpdateUntrackedRowsCommand()
+        {
+            var pkColumns = this.tableDescription.GetPrimaryKeysColumns().ToList();
+            var pkList = string.Join(", ", pkColumns.Select(c => Quoted(c.ColumnName)));
+            var pkSelect = string.Join(", ", pkColumns.Select(c => $"base.{Quoted(c.ColumnName)}"));
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"INSERT INTO {this.TrackingTableQuotedFullName} ({pkList}, \"update_scope_id\", \"sync_row_is_tombstone\", \"timestamp\", \"last_change_datetime\")");
+            sb.AppendLine($"SELECT {pkSelect}, NULL, 0, {TimestampValue}, {NowValue}");
+            sb.AppendLine($"FROM {this.TableQuotedFullName} base");
+            sb.AppendLine($"LEFT JOIN {this.TrackingTableQuotedFullName} side ON {this.PrimaryKeyJoin("base", "side")}");
+            sb.AppendLine($"WHERE side.{Quoted(pkColumns[0].ColumnName)} IS NULL");
+            return sb.ToString();
+        }
+
+        private string CreateDisableConstraintsCommand()
+        {
+            var tableName = this.TableName;
+            var sb = new StringBuilder();
+            sb.AppendLine("BEGIN");
+            sb.AppendLine("  FOR c IN (SELECT table_name, constraint_name FROM user_constraints");
+            sb.AppendLine($"            WHERE r_constraint_name IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}')");
+            sb.AppendLine("            AND constraint_type = 'R') LOOP");
+            sb.AppendLine("    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" DISABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine("  END LOOP;");
+            sb.AppendLine($"  FOR c IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}' AND constraint_type = 'R') LOOP");
+            sb.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.TableQuotedFullName} DISABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine("  END LOOP;");
+            sb.AppendLine("END;");
+            return sb.ToString();
+        }
+
+        private string CreateEnableConstraintsCommand()
+        {
+            var tableName = this.TableName;
+            var sb = new StringBuilder();
+            sb.AppendLine("BEGIN");
+            sb.AppendLine($"  FOR c IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}' AND constraint_type = 'R') LOOP");
+            sb.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.TableQuotedFullName} ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine("  END LOOP;");
+            sb.AppendLine("  FOR c IN (SELECT table_name, constraint_name FROM user_constraints");
+            sb.AppendLine($"            WHERE r_constraint_name IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}')");
+            sb.AppendLine("            AND constraint_type = 'R') LOOP");
+            sb.AppendLine("    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine("  END LOOP;");
+            sb.AppendLine("END;");
+            return sb.ToString();
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Tracking table & triggers DDL
+        // ----------------------------------------------------------------------------------------
+
+        /// <summary>
+        /// Builds the CREATE TABLE script for the tracking table (primary keys + sync metadata columns).
+        /// </summary>
+        public string CreateTrackingTableScript(Func<SyncColumn, string> columnTypeResolver)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"CREATE TABLE {this.TrackingTableQuotedFullName} (");
+
+            foreach (var pk in this.tableDescription.GetPrimaryKeysColumns())
+                sb.AppendLine($"  {Quoted(pk.ColumnName)} {columnTypeResolver(pk)} NOT NULL,");
+
+            sb.AppendLine("  \"update_scope_id\" RAW(16) NULL,");
+            sb.AppendLine("  \"timestamp\" NUMBER(19) NULL,");
+            sb.AppendLine("  \"sync_row_is_tombstone\" NUMBER(1) DEFAULT 0 NOT NULL,");
+            sb.AppendLine("  \"last_change_datetime\" TIMESTAMP NULL,");
+
+            var pkList = string.Join(", ", this.tableDescription.GetPrimaryKeysColumns().Select(c => Quoted(c.ColumnName)));
+            sb.AppendLine($"  CONSTRAINT {Quoted($"PK_{this.TrackingTableName}")} PRIMARY KEY ({pkList})");
+            sb.AppendLine(")");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Builds the CREATE OR REPLACE TRIGGER script for the given trigger type.
+        /// </summary>
+        public string CreateTriggerScript(DbTriggerType triggerType)
+        {
+            var triggerName = this.GetTriggerCommandName(triggerType);
+            var pkColumns = this.tableDescription.GetPrimaryKeysColumns().ToList();
+            var newOrOld = triggerType == DbTriggerType.Delete ? ":OLD" : ":NEW";
+            var tombstone = triggerType == DbTriggerType.Delete ? 1 : 0;
+            var (action, _) = triggerType switch
+            {
+                DbTriggerType.Insert => ("AFTER INSERT", 0),
+                DbTriggerType.Update => ("AFTER UPDATE", 0),
+                DbTriggerType.Delete => ("AFTER DELETE", 1),
+                _ => throw new ArgumentOutOfRangeException(nameof(triggerType)),
+            };
+
+            var onClause = string.Join(" AND ", pkColumns.Select(c => $"t.{Quoted(c.ColumnName)} = {newOrOld}.{Quoted(c.ColumnName)}"));
+            var pkList = string.Join(", ", pkColumns.Select(c => Quoted(c.ColumnName)));
+            var pkValues = string.Join(", ", pkColumns.Select(c => $"{newOrOld}.{Quoted(c.ColumnName)}"));
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"CREATE OR REPLACE TRIGGER {Quoted(triggerName)}");
+            sb.AppendLine($"{action} ON {this.TableQuotedFullName}");
+            sb.AppendLine("FOR EACH ROW");
+            sb.AppendLine("BEGIN");
+            sb.AppendLine($"  MERGE INTO {this.TrackingTableQuotedFullName} t USING DUAL ON ({onClause})");
+            sb.AppendLine("  WHEN MATCHED THEN UPDATE SET");
+            sb.AppendLine("    t.\"update_scope_id\" = NULL,");
+            sb.AppendLine($"    t.\"sync_row_is_tombstone\" = {tombstone},");
+            sb.AppendLine($"    t.\"timestamp\" = {TimestampValue},");
+            sb.AppendLine($"    t.\"last_change_datetime\" = {NowValue}");
+            sb.AppendLine($"  WHEN NOT MATCHED THEN INSERT ({pkList}, \"update_scope_id\", \"sync_row_is_tombstone\", \"timestamp\", \"last_change_datetime\")");
+            sb.AppendLine($"    VALUES ({pkValues}, NULL, {tombstone}, {TimestampValue}, {NowValue});");
+            sb.AppendLine("END;");
+
+            return sb.ToString();
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Filters
+        // ----------------------------------------------------------------------------------------
+        private void AppendFilterWhere(StringBuilder stringBuilder, SyncFilter filter)
+        {
+            var whereSide = this.CreateFilterWhereSide(filter);
+            if (!string.IsNullOrEmpty(whereSide))
+            {
+                stringBuilder.Append(whereSide);
+                stringBuilder.AppendLine("\tAND ");
+            }
+
+            var customWheres = this.CreateFilterCustomWheres(filter);
+            if (!string.IsNullOrEmpty(customWheres))
+            {
+                stringBuilder.Append(customWheres);
+                stringBuilder.AppendLine("\tAND ");
+            }
+        }
+
+        private string CreateFilterWhereSide(SyncFilter filter)
+        {
+            var sideWhereFilters = filter.Wheres;
+            if (sideWhereFilters.Count == 0)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("\t(");
+            var and = "   ";
+
+            foreach (var whereFilter in sideWhereFilters)
+            {
+                var tableFilter = this.tableDescription.Schema.Tables[whereFilter.TableName, whereFilter.SchemaName]
+                    ?? throw new FilterParamTableNotExistsException(whereFilter.TableName);
+
+                var columnFilter = tableFilter.Columns[whereFilter.ColumnName]
+                    ?? throw new FilterParamColumnNotExistsException(whereFilter.ColumnName, whereFilter.TableName);
+
+                var tableName = string.Equals(tableFilter.TableName, filter.TableName, SyncGlobalization.DataSourceStringComparison)
+                    ? "base"
+                    : $"\"{tableFilter.TableName}\"";
+
+                var parameterName = BindName(whereFilter.ParameterName);
+                var param = filter.Parameters[parameterName];
+                if (param == null)
+                    throw new FilterParamColumnNotExistsException(whereFilter.ColumnName, whereFilter.TableName);
+
+                sb.Append($"{and}({tableName}.{Quoted(columnFilter.ColumnName)} = :{parameterName}");
+                if (param.AllowNull)
+                    sb.Append($" OR :{parameterName} IS NULL");
+                sb.Append(")");
+                and = " AND ";
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("\t)");
+            sb.AppendLine("\tOR side.\"sync_row_is_tombstone\" = 1");
+            return sb.ToString();
+        }
+
+        private string CreateFilterCustomWheres(SyncFilter filter)
+        {
+            var customWheres = filter.CustomWheres;
+            if (customWheres.Count == 0)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            var and = "  ";
+            sb.AppendLine("\t(");
+            foreach (var customWhere in customWheres)
+            {
+                var iteration = customWhere.Replace("{{{", "\"").Replace("}}}", "\"");
+                sb.Append($"{and}{iteration}");
+                and = " AND ";
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("\t)");
+            return sb.ToString();
         }
     }
-} 
+}

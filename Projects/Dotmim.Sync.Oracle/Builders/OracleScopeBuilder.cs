@@ -82,7 +82,9 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "SELECT DBMS_FLASHBACK.GET_SYSTEM_CHANGE_NUMBER FROM DUAL";
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
+            command.CommandText = $"SELECT {OracleObjectNames.TimestampValue} FROM DUAL";
 
             try
             {
@@ -106,9 +108,9 @@ namespace Dotmim.Sync.Oracle.Builders
                     return (string.Empty, false);
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                throw ex;
+                throw;
             }
         }
 
@@ -122,6 +124,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT COUNT(*) 
                 FROM USER_TABLES 
@@ -147,9 +151,9 @@ namespace Dotmim.Sync.Oracle.Builders
                 int count = Convert.ToInt32(result);
                 return count == 0; // Need to create only if it doesn't exist
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                throw ex;
+                throw;
             }
         }
 
@@ -165,7 +169,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
             // Create the scope info table
             stringBuilder.AppendLine($"CREATE TABLE \"{this.tableName}\" (");
-            stringBuilder.AppendLine($"  \"sync_scope_id\" VARCHAR2(36) NOT NULL,");
+            stringBuilder.AppendLine($"  \"sync_scope_id\" RAW(16) NOT NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_name\" VARCHAR2(100) NOT NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_schema\" CLOB NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_setup\" CLOB NULL,");
@@ -194,6 +198,8 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 DELETE FROM ""{this.clientTableName}""
                 WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId AND ""sync_scope_client_id"" = :clientId";
@@ -226,6 +232,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 INSERT INTO ""{this.tableName}"" 
                 (""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
@@ -249,6 +257,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 INSERT INTO ""{this.clientTableName}"" 
                 (""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", ""sync_scope_parameters"", 
@@ -282,11 +292,15 @@ namespace Dotmim.Sync.Oracle.Builders
             var schemaParam = command.CreateParameter();
             schemaParam.ParameterName = ":schema";
             schemaParam.DbType = DbType.String;
+            if (schemaParam is OracleParameter schemaClob)
+                schemaClob.OracleDbType = OracleDbType.Clob;
             command.Parameters.Add(schemaParam);
 
             var setupParam = command.CreateParameter();
             setupParam.ParameterName = ":setup";
             setupParam.DbType = DbType.String;
+            if (setupParam is OracleParameter setupClob)
+                setupClob.OracleDbType = OracleDbType.Clob;
             command.Parameters.Add(setupParam);
 
             var versionParam = command.CreateParameter();
@@ -343,16 +357,22 @@ namespace Dotmim.Sync.Oracle.Builders
             var parametersParam = command.CreateParameter();
             parametersParam.ParameterName = ":parameters";
             parametersParam.DbType = DbType.String;
+            if (parametersParam is OracleParameter parametersClob)
+                parametersClob.OracleDbType = OracleDbType.Clob;
             command.Parameters.Add(parametersParam);
 
             var filtersParam = command.CreateParameter();
             filtersParam.ParameterName = ":filters";
             filtersParam.DbType = DbType.String;
+            if (filtersParam is OracleParameter filtersClob)
+                filtersClob.OracleDbType = OracleDbType.Clob;
             command.Parameters.Add(filtersParam);
 
             var propertiesParam = command.CreateParameter();
             propertiesParam.ParameterName = ":properties";
             propertiesParam.DbType = DbType.String;
+            if (propertiesParam is OracleParameter propertiesClob)
+                propertiesClob.OracleDbType = OracleDbType.Clob;
             command.Parameters.Add(propertiesParam);
 
             var lastClientSyncTimestampParam = command.CreateParameter();
@@ -391,6 +411,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 DELETE FROM ""{this.tableName}""
                 WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId";
@@ -418,6 +440,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT COUNT(*) 
                 FROM ""{this.tableName}""
@@ -446,6 +470,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT COUNT(*) 
                 FROM ""{this.clientTableName}""
@@ -479,6 +505,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT COUNT(*) 
                 FROM USER_TABLES 
@@ -502,6 +530,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT COUNT(*) 
                 FROM USER_TABLES 
@@ -525,6 +555,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = CreateScopeInfoTableScriptAsync(connection, transaction);
             return command;
         }
@@ -541,9 +573,9 @@ namespace Dotmim.Sync.Oracle.Builders
 
             // Create the scope info client table
             stringBuilder.AppendLine($"CREATE TABLE \"{this.clientTableName}\" (");
-            stringBuilder.AppendLine($"  \"sync_scope_id\" VARCHAR2(36) NOT NULL,");
+            stringBuilder.AppendLine($"  \"sync_scope_id\" RAW(16) NOT NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_name\" VARCHAR2(100) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_client_id\" VARCHAR2(36) NOT NULL,");
+            stringBuilder.AppendLine($"  \"sync_scope_client_id\" RAW(16) NOT NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_client_name\" VARCHAR2(100) NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_parameters\" CLOB NULL,");
             stringBuilder.AppendLine($"  \"sync_scope_filters\" CLOB NULL,");
@@ -558,6 +590,8 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = stringBuilder.ToString();
             return command;
         }
@@ -572,6 +606,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
                        ""sync_scope_last_server_sync_timestamp"", ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
@@ -590,6 +626,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", 
                        ""sync_scope_parameters"", ""sync_scope_filters"", ""sync_scope_properties"", 
@@ -610,6 +648,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
                        ""sync_scope_last_server_sync_timestamp"", ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
@@ -639,6 +679,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", 
                        ""sync_scope_parameters"", ""sync_scope_filters"", ""sync_scope_properties"", 
@@ -675,6 +717,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 UPDATE ""{this.tableName}"" SET
                 ""sync_scope_schema"" = :schema,
@@ -701,6 +745,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $@"
                 UPDATE ""{this.clientTableName}"" SET
                 ""sync_scope_client_name"" = :clientName,
@@ -729,7 +775,9 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "SELECT DBMS_FLASHBACK.GET_SYSTEM_CHANGE_NUMBER FROM DUAL";
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
+            command.CommandText = $"SELECT {OracleObjectNames.TimestampValue} FROM DUAL";
             return command;
         }
 
@@ -743,6 +791,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $"DROP TABLE \"{this.tableName}\"";
             return command;
         }
@@ -757,6 +807,8 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            if (command is OracleCommand oracleCommand)
+                oracleCommand.BindByName = true;
             command.CommandText = $"DROP TABLE \"{this.clientTableName}\"";
             return command;
         }

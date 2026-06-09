@@ -26,6 +26,42 @@ This document inventories every issue and lays out a phased plan to make the pro
 
 ---
 
+## 1b. Implementation status (this branch)
+
+A first pass of the functional core has been implemented (re-architected to the inline-SQL design):
+
+- **Done (code-complete, unverified — no build/Oracle env available in this session):**
+  - **Adapter (Phase 1):** `ParameterPrefix => ":"`, `BindByName = true` on every command,
+    all command types routed to inline `CommandType.Text`, bulk disabled, boolean coercion.
+  - **Object names / engine (Phase 4):** real SQL for `SelectChanges`,
+    `SelectInitializedChanges`, `SelectRow`; anonymous PL/SQL blocks for `UpdateRow`/`DeleteRow`
+    (conflict-guarded, `:sync_row_count := SQL%ROWCOUNT`); `DeleteMetadata`, `Reset`,
+    `UpdateUntrackedRows`, per-table enable/disable constraints; basic filter support.
+  - **Tracking + clock + triggers (Phase 3):** canonical tracking table (`timestamp` column),
+    one shared UTC epoch clock used by triggers **and** `GetLocalTimestamp`, MERGE-into-tracking
+    triggers with no mutating-table read.
+  - **Metadata (Phase 2):** rewritten to map on the managed `DbType` (dead switch removed).
+  - **Table builder (Phase 5):** stored-proc methods are no-ops; `GetColumnsAsync`,
+    `GetPrimaryKeysAsync`, `GetRelationsAsync` fixed; consistent (no-`ToUpper`) identifier
+    lookups; robust column-type resolver.
+  - **Scope builder (Phase 6):** GUID columns `RAW(16)` + `BindByName`; CLOB binds for large
+    schema/setup JSON; `GetLocalTimestamp` aligned to the shared clock.
+  - **Database builder:** `GetTableAsync`/`GetAllTablesAsync` implemented; rename/`Console`
+    issues fixed.
+  - **GUID strategy:** stored as `RAW(16)` everywhere (compatible with ODP.NET `DbType.Guid`
+    binding and `OracleDataReader.GetGuid`).
+
+- **Remaining / must verify against a live Oracle DB (Phase 0, 7, 8):**
+  - Build the project and run against Oracle (XE/Free 23c or 19c+). Validate ODP.NET specifics:
+    `PrepareAsync` on anonymous PL/SQL blocks, tolerance of unreferenced OUT params under
+    `BindByName`, and `DbType.Guid ↔ RAW(16)` round-trips.
+  - Verify the timestamp clock's monotonicity/resolution under load (sequence-backed fallback
+    if needed).
+  - Test integration (`ProviderType.Oracle`, `HelperDatabase`, `Setup.cs`), CI container,
+    NuGet packaging, sample, `.slnx` membership, and filter-sync correctness.
+
+---
+
 ## 2. How a Dotmim.Sync provider must behave (the mental model)
 
 Understanding three framework mechanics explains most of the required changes.
