@@ -27,6 +27,7 @@
   <Project Path="Projects\Dotmim.Sync.Core\Dotmim.Sync.Core.csproj" />
   <Project Path="Projects\Dotmim.Sync.MariaDB\Dotmim.Sync.MariaDB.csproj" />
   <Project Path="Projects\Dotmim.Sync.MySql\Dotmim.Sync.MySql.csproj" />
+  <Project Path="Projects\Dotmim.Sync.Oracle\Dotmim.Sync.Oracle.csproj" />
   <Project Path="Projects\Dotmim.Sync.PostgreSql\Dotmim.Sync.PostgreSql.csproj" />
   <Project Path="Projects\Dotmim.Sync.Sqlite\Dotmim.Sync.Sqlite.csproj" />
   <Project Path="Projects\Dotmim.Sync.SqlServer.ChangeTracking\Dotmim.Sync.SqlServer.ChangeTracking.csproj" />

@@ -51,14 +51,24 @@ A first pass of the functional core has been implemented (re-architected to the 
   - **GUID strategy:** stored as `RAW(16)` everywhere (compatible with ODP.NET `DbType.Guid`
     binding and `OracleDataReader.GetGuid`).
 
-- **Remaining / must verify against a live Oracle DB (Phase 0, 7, 8):**
+- **Test-harness plumbing (Phase 7, partial — done):**
+  - `ProviderType.Oracle = 32`; `HelperDatabase` fully wired (connection strings +
+    admin connection, `GetSyncProvider`, `GetDatabaseType`, pools, and
+    create/drop/exists/truncate/script with the Oracle "database = schema/user" model);
+    `appsettings.json` Oracle entries; Oracle project reference added to the test project;
+    Oracle added to `Dotmim.Sync.slnx`.
+
+- **Remaining / must verify against a live Oracle DB (Phase 0, 7-rest, 8):**
   - Build the project and run against Oracle (XE/Free 23c or 19c+). Validate ODP.NET specifics:
     `PrepareAsync` on anonymous PL/SQL blocks, tolerance of unreferenced OUT params under
     `BindByName`, and `DbType.Guid ↔ RAW(16)` round-trips.
   - Verify the timestamp clock's monotonicity/resolution under load (sequence-backed fallback
     if needed).
-  - Test integration (`ProviderType.Oracle`, `HelperDatabase`, `Setup.cs`), CI container,
-    NuGet packaging, sample, `.slnx` membership, and filter-sync correctness.
+  - **EF-Core test model support (the gate on the TcpTests matrix):** the test databases are
+    materialized via EF Core; add an Oracle EF Core provider (`Oracle.EntityFrameworkCore`) and
+    Oracle-compatible model configuration, then register `OracleTcpTests`/filter/conflict/http
+    classes in `Setup.cs`.
+  - Oracle CI container, NuGet packaging, sample, and filter-sync correctness.
 
 ---
 

@@ -12,6 +12,7 @@ namespace Dotmim.Sync.Tests.Core
         Sqlite = 4,
         MariaDB = 8,
         Postgres = 16,
+        Oracle = 32,
 
     }
 

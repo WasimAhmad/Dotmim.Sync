@@ -21,6 +21,8 @@ using Dotmim.Sync.MySql;
 using Dotmim.Sync.MariaDB;
 using Dotmim.Sync.Sqlite;
 using Dotmim.Sync.PostgreSql;
+using Dotmim.Sync.Oracle;
+using Oracle.ManagedDataAccess.Client;
 using Dotmim.Sync.Tests.Fixtures;
 using Dotmim.Sync.Tests.Models;
 using Microsoft.Extensions.Configuration;
@@ -137,6 +139,27 @@ namespace Dotmim.Sync.Tests.Misc
             return cn;
         }
 
+        /// <summary>
+        /// Returns the database connection string for Oracle. In Oracle a "database" is modelled as a
+        /// schema/user, so <paramref name="dbName"/> maps to the Oracle user name.
+        /// </summary>
+        internal static string GetOracleDatabaseConnectionString(string dbName)
+        {
+            var cstring = string.Format(configuration.GetSection("ConnectionStrings")["OracleConnection"], dbName);
+
+            // The connection-string template already carries the user id ({0}) and password, so the
+            // builder is only used to normalize the string (Azure overrides come from the template).
+            var builder = new OracleConnectionStringBuilder(cstring);
+
+            return builder.ToString();
+        }
+
+        /// <summary>
+        /// Returns the administrator (SYSTEM) connection string used to create/drop Oracle users.
+        /// </summary>
+        internal static string GetOracleAdminConnectionString()
+            => configuration.GetSection("ConnectionStrings")["OracleAdminConnection"];
+
         public static ConcurrentDictionary<string, string> names = new ConcurrentDictionary<string, string>();
 
         public static string GetRandomName(string pref = default)
@@ -203,9 +226,12 @@ namespace Dotmim.Sync.Tests.Misc
                 case ProviderType.Postgres:
                     con = GetPostgresDatabaseConnectionString(dbName);
                     break;
+                case ProviderType.Oracle:
+                    con = GetOracleDatabaseConnectionString(dbName);
+                    break;
             }
 
-            // default 
+            // default
             return con;
         }
 
@@ -221,6 +247,7 @@ namespace Dotmim.Sync.Tests.Misc
                 MariaDBSyncProvider _ => (ProviderType.MariaDB, dbName),
                 SqliteSyncProvider _ => (ProviderType.Sqlite, dbName),
                 NpgsqlSyncProvider _ => (ProviderType.Postgres, dbName),
+                OracleSyncProvider _ => (ProviderType.Oracle, dbName),
                 _ => (ProviderType.Sql, dbName),
             };
         }
@@ -235,6 +262,7 @@ namespace Dotmim.Sync.Tests.Misc
                 ProviderType.MariaDB => new MariaDBSyncProvider(GetMariaDBDatabaseConnectionString(dbName)),
                 ProviderType.Sqlite => new SqliteSyncProvider(GetSqliteDatabaseConnectionString(dbName)),
                 ProviderType.Postgres => new NpgsqlSyncProvider(GetPostgresDatabaseConnectionString(dbName)),
+                ProviderType.Oracle => new OracleSyncProvider(GetOracleDatabaseConnectionString(dbName)),
                 _ => null,
             };
 
@@ -253,6 +281,7 @@ namespace Dotmim.Sync.Tests.Misc
             MySqlConnection.ClearAllPools();
             SqliteConnection.ClearAllPools();
             NpgsqlConnection.ClearAllPools();
+            OracleConnection.ClearAllPools();
 
         }
 
@@ -274,6 +303,9 @@ namespace Dotmim.Sync.Tests.Misc
                     break;
                 case ProviderType.Postgres:
                     NpgsqlConnection.ClearAllPools();
+                    break;
+                case ProviderType.Oracle:
+                    OracleConnection.ClearAllPools();
                     break;
                 default:
                     break;
@@ -298,6 +330,9 @@ namespace Dotmim.Sync.Tests.Misc
                     break;
                 case ProviderType.Postgres:
                     await CreatePostgresDatabaseAsync(dbName, recreateDb);
+                    break;
+                case ProviderType.Oracle:
+                    await CreateOracleDatabaseAsync(dbName, recreateDb);
                     break;
                 case ProviderType.Sqlite:
                     await Task.CompletedTask;
@@ -477,6 +512,9 @@ namespace Dotmim.Sync.Tests.Misc
                     case ProviderType.Postgres:
                         DropPostgresDatabase(dbName);
                         break;
+                    case ProviderType.Oracle:
+                        DropOracleDatabase(dbName);
+                        break;
                 }
                 Debug.WriteLine($"- Database {providerType} {dbName} dropped");
             }
@@ -513,6 +551,9 @@ namespace Dotmim.Sync.Tests.Misc
                     case ProviderType.Postgres:
                         TruncatePostgresTable(dbName, tableName, schemaName);
                         break;
+                    case ProviderType.Oracle:
+                        TruncateOracleTable(dbName, tableName);
+                        break;
                 }
                 Debug.WriteLine($"- Database {providerType} {dbName} dropped");
             }
@@ -542,6 +583,8 @@ namespace Dotmim.Sync.Tests.Misc
                     return ExistsSqliteDatabase(dbName);
                 case ProviderType.Postgres:
                     return ExistsPostgresDatabase(dbName);
+                case ProviderType.Oracle:
+                    return ExistsOracleDatabase(dbName);
             }
 
             return false;
@@ -635,6 +678,91 @@ namespace Dotmim.Sync.Tests.Misc
             sysConnection.Close();
 
             return exists != null && exists != DBNull.Value && (long)exists == 1;
+        }
+
+        /// <summary>
+        /// Create a new Oracle "database" — modelled as a schema/user in the target PDB.
+        /// Requires the administrator (SYSTEM) connection string.
+        /// </summary>
+        private static async Task CreateOracleDatabaseAsync(string dbName, bool recreateDb = true)
+        {
+            var onRetry = new Func<Exception, int, TimeSpan, object, Task>((ex, cpt, ts, arg) =>
+            {
+                Console.WriteLine($"Creating Oracle user failed when connecting as admin ({ex.Message}). Wating {ts.Milliseconds}. Try number {cpt}");
+                return Task.CompletedTask;
+            });
+
+            var policy = SyncPolicy.WaitAndRetry(3, TimeSpan.FromMilliseconds(500), null, onRetry);
+
+            await policy.ExecuteAsync(async () =>
+            {
+                using var adminConnection = new OracleConnection(GetOracleAdminConnectionString());
+                adminConnection.Open();
+
+                if (recreateDb)
+                    DropOracleUser(adminConnection, dbName);
+
+                using (var cmdCreate = new OracleCommand($"CREATE USER {dbName} IDENTIFIED BY \"Password12!\"", adminConnection))
+                    await cmdCreate.ExecuteNonQueryAsync();
+
+                using (var cmdGrant = new OracleCommand($"GRANT CONNECT, RESOURCE TO {dbName}", adminConnection))
+                    await cmdGrant.ExecuteNonQueryAsync();
+
+                using (var cmdQuota = new OracleCommand($"ALTER USER {dbName} QUOTA UNLIMITED ON USERS", adminConnection))
+                    await cmdQuota.ExecuteNonQueryAsync();
+
+                adminConnection.Close();
+            });
+        }
+
+        /// <summary>
+        /// Drop an Oracle "database" (schema/user) using the administrator connection.
+        /// </summary>
+        private static void DropOracleDatabase(string dbName)
+        {
+            using var adminConnection = new OracleConnection(GetOracleAdminConnectionString());
+            adminConnection.Open();
+            DropOracleUser(adminConnection, dbName);
+            adminConnection.Close();
+        }
+
+        private static void DropOracleUser(OracleConnection adminConnection, string dbName)
+        {
+            try
+            {
+                using var cmd = new OracleCommand($"DROP USER {dbName} CASCADE", adminConnection);
+                cmd.ExecuteNonQuery();
+            }
+            catch (OracleException)
+            {
+                // The user may not exist yet — ignore.
+            }
+        }
+
+        private static void TruncateOracleTable(string dbName, string tableName)
+        {
+            using var connection = new OracleConnection(GetOracleDatabaseConnectionString(dbName));
+            connection.Open();
+
+            using (var cmd = new OracleCommand($"DELETE FROM \"{tableName}\"", connection))
+                cmd.ExecuteNonQuery();
+
+            connection.Close();
+        }
+
+        /// <summary>
+        /// Check if an Oracle "database" (schema/user) exists.
+        /// </summary>
+        private static bool ExistsOracleDatabase(string dbName)
+        {
+            using var adminConnection = new OracleConnection(GetOracleAdminConnectionString());
+            adminConnection.Open();
+
+            using var cmd = new OracleCommand($"SELECT COUNT(*) FROM dba_users WHERE username = '{dbName.ToUpperInvariant()}'", adminConnection);
+            var count = Convert.ToInt32(cmd.ExecuteScalar());
+
+            adminConnection.Close();
+            return count > 0;
         }
 
         /// <summary>
@@ -787,6 +915,8 @@ namespace Dotmim.Sync.Tests.Misc
                     return ExecuteSqliteScriptAsync(dbName, script);
                 case ProviderType.Postgres:
                     return ExecutePostgreSqlScriptAsync(dbName, script);
+                case ProviderType.Oracle:
+                    return ExecuteOracleScriptAsync(dbName, script);
                 case ProviderType.Sql:
                 default:
                     return ExecuteSqlScriptAsync(dbName, script);
@@ -842,6 +972,14 @@ namespace Dotmim.Sync.Tests.Misc
             await using var connection = new NpgsqlConnection(GetPostgresDatabaseConnectionString(dbName));
             connection.Open();
             await using (var cmdDb = new NpgsqlCommand(script, connection))
+                await cmdDb.ExecuteNonQueryAsync();
+            connection.Close();
+        }
+        private static async Task ExecuteOracleScriptAsync(string dbName, string script)
+        {
+            using var connection = new OracleConnection(GetOracleDatabaseConnectionString(dbName));
+            connection.Open();
+            using (var cmdDb = new OracleCommand(script, connection))
                 await cmdDb.ExecuteNonQueryAsync();
             connection.Close();
         }
