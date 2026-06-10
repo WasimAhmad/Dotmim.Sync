@@ -14,5 +14,14 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         [InlineData(12154, false)] // cannot resolve connect identifier — config error, permanent
         public void IsTransient_ClassifiesOracleErrorNumbers(int number, bool expected)
             => Assert.Equal(expected, OracleTransientExceptionDetector.IsTransient(number));
+
+        [Fact]
+        public void GetDatabaseName_ReturnsUserSchema_NotDataSource()
+        {
+            var provider = new OracleSyncProvider("Data Source=localhost:1521/FREEPDB1;User Id=SCOTT;Password=x;");
+
+            // In the Oracle model the "database" is the user/schema; DataSource is the host
+            Assert.Equal("SCOTT", provider.GetDatabaseName());
+        }
     }
 }

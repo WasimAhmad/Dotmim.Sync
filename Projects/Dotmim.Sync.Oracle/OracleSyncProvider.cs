@@ -99,7 +99,7 @@ namespace Dotmim.Sync.Oracle
         public override string GetShortProviderTypeName() => ShortProviderType;
 
         /// <inheritdoc/>
-        public override string GetDatabaseName() => this.builder?.DataSource ?? string.Empty;
+        public override string GetDatabaseName() => this.builder?.UserID ?? string.Empty;
 
         /// <summary>
         /// Gets or sets the Metadata object which parses Oracle types.
@@ -134,6 +134,7 @@ namespace Dotmim.Sync.Oracle
             if (this.builder != null && !string.IsNullOrEmpty(this.builder.ConnectionString))
             {
                 syncException.DataSource = this.builder.DataSource;
+                syncException.InitialCatalog = this.builder.UserID;
             }
 
             // Can add more info from OracleException
