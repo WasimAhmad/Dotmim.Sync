@@ -588,4 +588,38 @@ namespace Dotmim.Sync.Tests
             yield return HelperDatabase.GetSyncProvider(ProviderType.Oracle, this.oracleClientRandomDatabaseName, false);
         }
     }
+
+    public class OracleTcpFilterTests : TcpFilterTests
+    {
+        public OracleTcpFilterTests(ITestOutputHelper output, DatabaseServerFixture fixture)
+            : base(output, fixture)
+        {
+        }
+
+        public override ProviderType ServerProviderType => ProviderType.Oracle;
+
+        private string oracleClientRandomDatabaseName = HelperDatabase.GetRandomName("tcpf_ora_");
+
+        public override IEnumerable<CoreProvider> GetClientProviders()
+        {
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Oracle, this.oracleClientRandomDatabaseName, false);
+        }
+    }
+
+    public class OracleHttpTests : HttpTests
+    {
+        public OracleHttpTests(ITestOutputHelper output, DatabaseServerFixture fixture)
+            : base(output, fixture)
+        {
+        }
+
+        public override ProviderType ServerProviderType => ProviderType.Oracle;
+
+        private string oracleClientRandomDatabaseName = HelperDatabase.GetRandomName("http_ora_");
+
+        public override IEnumerable<CoreProvider> GetClientProviders()
+        {
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Oracle, this.oracleClientRandomDatabaseName, false);
+        }
+    }
 }
