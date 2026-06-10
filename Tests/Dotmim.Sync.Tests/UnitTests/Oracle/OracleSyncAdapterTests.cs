@@ -61,7 +61,12 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
 
             var rowCount = parameters.Single(p => p.ParameterName == ":sync_row_count");
             Assert.Equal(ParameterDirection.Output, rowCount.Direction);
+            // Fix 1 (ODP.NET dual-API): type MUST be set via DbType so the output value
+            // comes back as a boxed int. Setting only OracleDbType returns OracleDecimal,
+            // which the orchestrator's hard-cast (int)Value cannot unbox.
+            // ODP.NET output behaviour cannot be asserted statically — it is on the Task 16 live checklist.
             Assert.Equal(OracleDbType.Int32, rowCount.OracleDbType);
+            Assert.Equal(DbType.Int32, rowCount.DbType);
 
             var scopeId = parameters.Single(p => p.ParameterName == ":sync_scope_id");
             Assert.Equal(OracleDbType.Raw, scopeId.OracleDbType);
@@ -85,6 +90,8 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             var parameter = command.Parameters.Cast<OracleParameter>().Single();
             Assert.Equal(":sync_row_count", parameter.ParameterName);
             Assert.Equal(ParameterDirection.Output, parameter.Direction);
+            // Fix 1: DbType must be Int32 so ODP.NET returns a boxed int on output, not OracleDecimal
+            Assert.Equal(DbType.Int32, parameter.DbType);
         }
 
         [Fact]
@@ -111,11 +118,13 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
                 Assert.NotNull(command);
 
                 // strip PL/SQL local variable declarations (v_xxx) and trigger pseudo-rows
-                // are not bind variables; bind variables are :name tokens not preceded by a word char
-                var bindNames = Regex.Matches(command.CommandText, @"(?<![\w:]):(?<name>[A-Za-z_][A-Za-z0-9_]*)")
+                // are not bind variables; bind variables are :name tokens not preceded by a word char.
+                // Trigger DDL never flows through GetCommand so OLD/NEW filtering is unnecessary and
+                // would mask a genuine bind for a column named e.g. NewStatus.
+                // The character class includes $ and # which are legal Oracle identifier characters.
+                var bindNames = Regex.Matches(command.CommandText, @"(?<![\w:]):(?<name>[A-Za-z_][A-Za-z0-9_$#]*)")
                     .Cast<Match>()
                     .Select(m => m.Groups["name"].Value)
-                    .Where(n => !n.StartsWith("OLD", StringComparison.OrdinalIgnoreCase) && !n.StartsWith("NEW", StringComparison.OrdinalIgnoreCase))
                     .Select(n => n.ToUpperInvariant())
                     .ToHashSet();
 
@@ -205,6 +214,48 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             adapter.EnsureCommandParameters(context, command, DbCommandType.SelectRow, connection, null);
 
             Assert.Equal(new[] { ":ProductId" }, ParameterNames(command));
+        }
+
+        [Fact]
+        public void GetCommand_SelectChangesWithFilters_CreatesSafeFilterParameters()
+        {
+            var (adapter, context) = BuildAdapter();
+
+            var filter = new SyncFilter("Product");
+            filter.Parameters.Add(new SyncFilterParameter { Name = "CustomerId", DbType = DbType.Guid });
+            filter.Parameters.Add(new SyncFilterParameter { Name = "Region", DbType = DbType.String }); // MaxLength 0
+
+            var (command, _) = adapter.GetCommand(context, DbCommandType.SelectChangesWithFilters, filter);
+            var parameters = command.Parameters.Cast<OracleParameter>().ToArray();
+
+            var customerId = parameters.Single(p => p.ParameterName == ":CustomerId");
+            Assert.Equal(OracleDbType.Raw, customerId.OracleDbType);
+
+            // a comparison bind must never be CLOB (ORA-00932) nor report DbType.Object
+            var region = parameters.Single(p => p.ParameterName == ":Region");
+            Assert.Equal(OracleDbType.Varchar2, region.OracleDbType);
+
+            // guid-strings on a Raw filter param (no SourceColumn) parse as Guid, not base64
+            var guid = Guid.NewGuid();
+            adapter.AddCommandParameterValue(context, customerId, guid.ToString(), command, DbCommandType.SelectChangesWithFilters);
+            Assert.Equal(guid.ToByteArray(), customerId.Value);
+        }
+
+        [Fact]
+        public void AddCommandParameterValue_CoercesConvertedBooleanFormsToNumbers()
+        {
+            var (adapter, context) = BuildAdapter();
+            var (command, _) = adapter.GetCommand(context, DbCommandType.UpdateRow, null);
+            var isActive = command.Parameters.Cast<OracleParameter>().Single(p => p.ParameterName == ":IsActive");
+
+            adapter.AddCommandParameterValue(context, isActive, "true", command, DbCommandType.UpdateRow);
+            Assert.Equal(1, isActive.Value);
+
+            adapter.AddCommandParameterValue(context, isActive, 1L, command, DbCommandType.UpdateRow);
+            Assert.Equal(1, isActive.Value);
+
+            adapter.AddCommandParameterValue(context, isActive, "0", command, DbCommandType.UpdateRow);
+            Assert.Equal(0, isActive.Value);
         }
     }
 }

@@ -145,7 +145,7 @@ namespace Dotmim.Sync.Oracle
                     break;
 
                 case DbCommandType.Reset:
-                    this.AddParameter(command, "sync_row_count", OracleDbType.Int32, ParameterDirection.Output);
+                    this.AddSyncRowCountParameter(command);
                     break;
 
                 // UpdateUntrackedRows, Disable/EnableConstraints: no parameters
@@ -157,7 +157,20 @@ namespace Dotmim.Sync.Oracle
             this.AddParameter(command, "sync_scope_id", OracleDbType.Raw, size: 16);
             this.AddParameter(command, "sync_force_write", OracleDbType.Int64);
             this.AddParameter(command, "sync_min_timestamp", OracleDbType.Int64);
-            this.AddParameter(command, "sync_row_count", OracleDbType.Int32, ParameterDirection.Output);
+            this.AddSyncRowCountParameter(command);
+        }
+
+        private void AddSyncRowCountParameter(OracleCommand command)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $"{this.ParameterPrefix}sync_row_count";
+
+            // ODP.NET dual-API rule: output values come back as provider types
+            // (OracleDecimal) when the type is set via OracleDbType, and as .NET types
+            // (int) when set via DbType. The orchestrator hard-casts (int)Value.
+            parameter.DbType = DbType.Int32;
+            parameter.Direction = ParameterDirection.Output;
+            command.Parameters.Add(parameter);
         }
 
         private void AddColumnParameter(OracleCommand command, SyncColumn column)
@@ -220,9 +233,17 @@ namespace Dotmim.Sync.Oracle
                         : 0;
                 }
 
+                // Filter parameters are used in equality comparisons ("col" = :p).
+                // ODP.NET maps maxLength==0 strings to CLOB, which is illegal in comparisons
+                // (ORA-00932) and causes DbType.Object to be reported, crashing the framework's
+                // value conversion. Always use Varchar2 for all String-family filter types.
+                var oracleDbType = dbType is DbType.String or DbType.AnsiString or DbType.StringFixedLength or DbType.AnsiStringFixedLength or DbType.Xml
+                    ? OracleDbType.Varchar2
+                    : this.OracleMetadata.GetOracleDbType(dbType, maxLength);
+
                 var parameter = command.CreateParameter();
                 parameter.ParameterName = $"{this.ParameterPrefix}{parameterName}";
-                parameter.OracleDbType = this.OracleMetadata.GetOracleDbType(dbType, maxLength);
+                parameter.OracleDbType = oracleDbType;
                 if (maxLength > 0)
                     parameter.Size = maxLength;
 
@@ -258,6 +279,15 @@ namespace Dotmim.Sync.Oracle
                         return;
                     }
 
+                    // Raw filter params (e.g. a Guid filter parameter) have no SourceColumn
+                    // and receive guid-strings over HTTP. Guid strings and base64 payloads
+                    // are disjoint formats (hyphens are invalid base64), so try Guid first.
+                    if (value is string rawString && Guid.TryParse(rawString, out var parsedGuid))
+                    {
+                        parameter.Value = parsedGuid.ToByteArray();
+                        return;
+                    }
+
                     // genuine binary column (or raw filter param): byte[] passes through,
                     // strings arrive base64-encoded from the serializer
                     parameter.Value = value is byte[] bytes ? bytes : SyncTypeConverter.TryConvertFromDbType(value, DbType.Binary);
@@ -276,9 +306,15 @@ namespace Dotmim.Sync.Oracle
             // trustworthy for provider-specific types (Raw -> Binary, Clob -> Object)
             var column = string.IsNullOrEmpty(parameter.SourceColumn) ? null : this.TableDescription.Columns[parameter.SourceColumn];
 
-            parameter.Value = column != null
+            var converted = column != null
                 ? SyncTypeConverter.TryConvertFromDbType(value, column.GetDbType())
                 : SyncTypeConverter.TryConvertFromDbType(value, parameter.DbType);
+
+            // Oracle has no boolean: anything the converter resolved to bool binds as 0/1
+            if (converted is bool convertedBool)
+                converted = convertedBool ? 1 : 0;
+
+            parameter.Value = converted;
         }
 
         /// <inheritdoc/>
@@ -288,12 +324,15 @@ namespace Dotmim.Sync.Oracle
                 oracleCommand.BindByName = true;
 
             // Defensive net: strip parameters that have no matching bind variable in the SQL.
-            // GetCommand already creates exactly the right parameters, but interceptors or future
-            // framework versions may add extras that would cause ORA-01036.
+            // GetCommand already creates exactly the right parameters, but framework versions
+            // may add extras that would cause ORA-01036. (Interceptors run AFTER this method
+            // so they are not the source of extras here.)
+            // Use a negative lookahead instead of \b: \b does not match after # or $
+            // (legal Oracle identifier characters), which would silently drop a required bind.
             for (var i = command.Parameters.Count - 1; i >= 0; i--)
             {
                 var name = command.Parameters[i].ParameterName.TrimStart(':', '@');
-                if (!Regex.IsMatch(command.CommandText, $@":{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
+                if (!Regex.IsMatch(command.CommandText, $@":{Regex.Escape(name)}(?![\w$#])", RegexOptions.IgnoreCase))
                     command.Parameters.RemoveAt(i);
             }
 
