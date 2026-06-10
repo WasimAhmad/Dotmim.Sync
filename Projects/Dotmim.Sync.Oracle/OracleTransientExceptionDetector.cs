@@ -9,7 +9,10 @@ namespace Dotmim.Sync.Oracle
     /// </summary>
     public static class OracleTransientExceptionDetector
     {
-        // List of Oracle error numbers that are considered transient/recoverable
+        // List of Oracle error numbers that are considered transient/recoverable.
+        // Note: ORA-17002 (the JDBC-style "IO error" code) is intentionally NOT listed —
+        // whether ODP.NET managed surfaces mid-session network drops as 17002 or as
+        // 3113/3135 must be confirmed against a live database first (fix-plan Task 16).
         private static readonly HashSet<int> transientErrorNumbers = new HashSet<int>
         {
             // Network errors

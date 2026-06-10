@@ -142,10 +142,28 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         }
 
         [Fact]
-        public void ConstraintCommands_EmbedTableNameAsEscapedLiteral()
+        public void ConstraintCommands_EmbedTableNameAsLiteral()
         {
             var sql = BuildObjectNames().GetCommandText(DbCommandType.DisableConstraints);
             Assert.Contains("= 'Product'", sql);
+        }
+
+        [Fact]
+        public void ConstraintCommands_EscapeApostrophesInTableNameLiteral()
+        {
+            var table = new SyncTable("O'Brien");
+            table.Columns.Add(new SyncColumn("Id", typeof(int)));
+            table.PrimaryKeys.Add("Id");
+
+            var schema = new SyncSet();
+            schema.Tables.Add(table);
+
+            var scopeInfo = new ScopeInfo { Name = "DefaultScope", Setup = new SyncSetup("O'Brien") };
+            var objectNames = new OracleObjectNames(table, scopeInfo);
+
+            var sql = objectNames.GetCommandText(DbCommandType.DisableConstraints);
+
+            Assert.Contains("= 'O''Brien'", sql);
         }
     }
 }
