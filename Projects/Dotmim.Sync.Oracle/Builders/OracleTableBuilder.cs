@@ -308,7 +308,7 @@ namespace Dotmim.Sync.Oracle.Builders
                         IsAutoIncrement = false,
                     };
 
-                    column.SetType(GetManagedType(dataType, precision, scale));
+                    column.SetType(GetManagedType(dataType, precision, scale, dataLength));
 
                     columns.Add(column);
                 }
@@ -527,8 +527,10 @@ namespace Dotmim.Sync.Oracle.Builders
 
         /// <summary>
         /// Maps an Oracle native type name to a managed CLR type (used when reading an existing schema).
+        /// RAW(16) maps to <see cref="Guid"/> because that is how this provider stores GUIDs
+        /// (same heuristic as MySQL's char(36) → Guid).
         /// </summary>
-        internal static Type GetManagedType(string oracleType, byte precision, byte scale)
+        internal static Type GetManagedType(string oracleType, byte precision, byte scale, int dataLength = 0)
         {
             var type = oracleType.ToUpperInvariant();
 
@@ -548,6 +550,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 "BINARY_FLOAT" => typeof(float),
                 "BINARY_DOUBLE" => typeof(double),
                 "DATE" => typeof(DateTime),
+                "RAW" when dataLength == 16 => typeof(Guid),
                 "RAW" or "LONG RAW" or "BLOB" or "BFILE" => typeof(byte[]),
                 _ => typeof(string),
             };

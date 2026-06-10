@@ -23,5 +23,15 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             // In the Oracle model the "database" is the user/schema; DataSource is the host
             Assert.Equal("SCOTT", provider.GetDatabaseName());
         }
+
+        [Theory]
+        [InlineData("RAW", 16, typeof(System.Guid))]    // RAW(16) is how this provider stores GUIDs
+        [InlineData("RAW", 32, typeof(byte[]))]
+        [InlineData("RAW", 0, typeof(byte[]))]
+        [InlineData("BLOB", 0, typeof(byte[]))]
+        [InlineData("VARCHAR2", 0, typeof(string))]
+        [InlineData("NUMBER", 0, typeof(decimal))]
+        public void GetManagedType_MapsRaw16ToGuid(string oracleType, int dataLength, System.Type expected)
+            => Assert.Equal(expected, Dotmim.Sync.Oracle.Builders.OracleTableBuilder.GetManagedType(oracleType, 0, 0, dataLength));
     }
 }

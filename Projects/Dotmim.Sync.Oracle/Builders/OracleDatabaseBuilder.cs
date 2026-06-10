@@ -129,7 +129,7 @@ namespace Dotmim.Sync.Oracle.Builders
                             Precision = precision,
                             Scale = scale,
                         };
-                        column.SetType(OracleTableBuilder.GetManagedType(dataType, precision, scale));
+                        column.SetType(OracleTableBuilder.GetManagedType(dataType, precision, scale, dataLength));
                         syncTable.Columns.Add(column);
                     }
                 }
