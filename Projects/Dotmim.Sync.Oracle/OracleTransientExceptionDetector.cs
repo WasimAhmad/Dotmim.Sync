@@ -14,12 +14,11 @@ namespace Dotmim.Sync.Oracle
         {
             // Network errors
             12152, // TNS:unable to send break message
-            12154, // TNS:could not resolve the connect identifier
             12157, // TNS:internal network communication error
             12170, // TNS:Connect timeout occurred
             12224, // TNS:no listener
             12225, // TNS:destination host unreachable
-            
+
             // Connectivity errors
             1033,  // ORACLE initialization or shutdown in progress
             1034,  // ORACLE not available
@@ -27,16 +26,17 @@ namespace Dotmim.Sync.Oracle
             3113,  // end-of-file on communication channel
             3114,  // not connected to ORACLE
             3135,  // connection lost contact
-            
+
             // Resource errors
             51,    // timeout occurred while waiting for resource
             54,    // resource busy and acquire with NOWAIT specified
-            1542,  // table or view does not exist
-            
+
             // Concurrency errors
+            60,    // deadlock detected while waiting for resource
+            2049,  // distributed lock timeout
             8176,  // consistent read failure; rollback data not available
             8177,  // can't serialize access for this transaction
-            
+
             // Memory errors
             4030,  // out of process memory
             4031,  // unable to allocate bytes of shared memory
@@ -44,12 +44,17 @@ namespace Dotmim.Sync.Oracle
         };
 
         /// <summary>
+        /// Returns true when the Oracle error number is considered transient.
+        /// </summary>
+        public static bool IsTransient(int oracleErrorNumber) => transientErrorNumbers.Contains(oracleErrorNumber);
+
+        /// <summary>
         /// Determines whether the specified exception should be retried.
         /// </summary>
         public static bool ShouldRetryOn(Exception ex)
         {
             if (ex is OracleException oracleException)
-                return transientErrorNumbers.Contains(oracleException.Number);
+                return IsTransient(oracleException.Number);
 
             return false;
         }
