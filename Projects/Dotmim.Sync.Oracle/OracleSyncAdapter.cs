@@ -7,6 +7,8 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace Dotmim.Sync.Oracle
@@ -87,7 +89,145 @@ namespace Dotmim.Sync.Oracle
                 BindByName = true,
             };
 
+            this.SetCommandParameters(commandType, command, filter);
+
             return (command, false);
+        }
+
+        /// <summary>
+        /// Pre-creates the full parameter set for each command, with Oracle-safe types.
+        /// The orchestrator skips its generic parameter creation when the command already
+        /// has parameters — which matters twice here: ODP.NET throws when the framework
+        /// assigns <c>DbType.Guid</c>, and ODP.NET raises ORA-01036 for parameters that
+        /// have no matching bind variable (so only parameters the statement references
+        /// are created).
+        /// </summary>
+        private void SetCommandParameters(DbCommandType commandType, OracleCommand command, SyncFilter filter)
+        {
+            switch (commandType)
+            {
+                case DbCommandType.SelectChanges:
+                case DbCommandType.SelectChangesWithFilters:
+                    this.AddParameter(command, "sync_min_timestamp", OracleDbType.Int64);
+                    this.AddParameter(command, "sync_scope_id", OracleDbType.Raw, size: 16);
+                    this.AddFilterParameters(command, filter);
+                    break;
+
+                case DbCommandType.SelectInitializedChanges:
+                case DbCommandType.SelectInitializedChangesWithFilters:
+                    this.AddParameter(command, "sync_min_timestamp", OracleDbType.Int64);
+                    this.AddFilterParameters(command, filter);
+                    break;
+
+                case DbCommandType.SelectRow:
+                    foreach (var column in this.TableDescription.GetPrimaryKeysColumns())
+                        this.AddColumnParameter(command, column);
+                    break;
+
+                case DbCommandType.UpdateRow:
+                case DbCommandType.InsertRow:
+                case DbCommandType.UpdateRows:
+                case DbCommandType.InsertRows:
+                    foreach (var column in this.TableDescription.Columns.Where(c => !c.IsReadOnly))
+                        this.AddColumnParameter(command, column);
+                    this.AddApplyRowSyncParameters(command);
+                    break;
+
+                case DbCommandType.DeleteRow:
+                case DbCommandType.DeleteRows:
+                    foreach (var column in this.TableDescription.GetPrimaryKeysColumns())
+                        this.AddColumnParameter(command, column);
+                    this.AddApplyRowSyncParameters(command);
+                    break;
+
+                case DbCommandType.DeleteMetadata:
+                    this.AddParameter(command, "sync_row_timestamp", OracleDbType.Int64);
+                    break;
+
+                case DbCommandType.Reset:
+                    this.AddParameter(command, "sync_row_count", OracleDbType.Int32, ParameterDirection.Output);
+                    break;
+
+                // UpdateUntrackedRows, Disable/EnableConstraints: no parameters
+            }
+        }
+
+        private void AddApplyRowSyncParameters(OracleCommand command)
+        {
+            this.AddParameter(command, "sync_scope_id", OracleDbType.Raw, size: 16);
+            this.AddParameter(command, "sync_force_write", OracleDbType.Int64);
+            this.AddParameter(command, "sync_min_timestamp", OracleDbType.Int64);
+            this.AddParameter(command, "sync_row_count", OracleDbType.Int32, ParameterDirection.Output);
+        }
+
+        private void AddColumnParameter(OracleCommand command, SyncColumn column)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $"{this.ParameterPrefix}{this.GetParsedColumnNames(column.ColumnName).NormalizedName}";
+            parameter.SourceColumn = column.ColumnName;
+            parameter.OracleDbType = this.OracleMetadata.GetOracleDbType(column.GetDbType(), column.MaxLength);
+            command.Parameters.Add(parameter);
+        }
+
+        private void AddParameter(OracleCommand command, string name, OracleDbType oracleDbType, ParameterDirection direction = ParameterDirection.Input, int size = 0)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $"{this.ParameterPrefix}{name}";
+            parameter.OracleDbType = oracleDbType;
+            parameter.Direction = direction;
+
+            if (size > 0)
+                parameter.Size = size;
+
+            command.Parameters.Add(parameter);
+        }
+
+        private void AddFilterParameters(OracleCommand command, SyncFilter filter)
+        {
+            if (filter == null)
+                return;
+
+            foreach (var filterParameter in filter.Parameters)
+            {
+                // Mirror BaseOrchestrator.InternalSetSelectChangesParameters' type
+                // resolution, substituting the Oracle-safe type mapping.
+                string parameterName;
+                DbType dbType;
+                int maxLength;
+
+                if (filterParameter.DbType.HasValue)
+                {
+                    var columnNames = this.GetParsedColumnNames(filterParameter.Name);
+                    parameterName = columnNames.NormalizedName;
+                    dbType = filterParameter.DbType.Value;
+                    maxLength = filterParameter.MaxLength;
+                }
+                else
+                {
+                    var tableFilter = this.TableDescription.Schema?.Tables[filterParameter.TableName, filterParameter.SchemaName];
+                    if (tableFilter == null)
+                        throw new FilterParamTableNotExistsException(filterParameter.TableName);
+
+                    var columnFilter = tableFilter.Columns[filterParameter.Name];
+                    if (columnFilter == null)
+                        throw new FilterParamColumnNotExistsException(filterParameter.Name, filterParameter.TableName);
+
+                    var columnNames = this.GetTableBuilder().GetParsedColumnNames(columnFilter);
+                    parameterName = columnNames.NormalizedName;
+                    dbType = columnFilter.GetDbType();
+                    maxLength = columnFilter.GetDataType() == typeof(string) && columnFilter.MaxLength > 0
+                        ? columnFilter.MaxLength
+                        : 0;
+                }
+
+                var parameter = command.CreateParameter();
+                parameter.ParameterName = $"{this.ParameterPrefix}{parameterName}";
+                parameter.OracleDbType = this.OracleMetadata.GetOracleDbType(dbType, maxLength);
+                if (maxLength > 0)
+                    parameter.Size = maxLength;
+
+                command.Parameters.Add(parameter);
+            }
         }
 
         /// <inheritdoc/>
@@ -99,18 +239,46 @@ namespace Dotmim.Sync.Oracle
                 return;
             }
 
-            // Oracle has no native boolean: uniqueidentifier columns are stored as RAW(16) (handled
-            // natively by ODP.NET via DbType.Guid); booleans are stored as NUMBER(1).
-            if (value is bool boolValue)
+            if (parameter is OracleParameter oracleParameter)
             {
-                if (parameter is OracleParameter oracleBoolParameter)
-                    oracleBoolParameter.OracleDbType = OracleDbType.Int32;
+                // Guid values bind to RAW(16) as Guid.ToByteArray() — ODP.NET has no
+                // DbType.Guid. Guid columns may receive strings (HTTP/JSON rows).
+                if (oracleParameter.OracleDbType == OracleDbType.Raw)
+                {
+                    if (value is Guid guid)
+                    {
+                        parameter.Value = guid.ToByteArray();
+                        return;
+                    }
 
-                parameter.Value = boolValue ? 1 : 0;
-                return;
+                    var rawColumn = string.IsNullOrEmpty(parameter.SourceColumn) ? null : this.TableDescription.Columns[parameter.SourceColumn];
+                    if (rawColumn != null && rawColumn.GetDbType() == DbType.Guid)
+                    {
+                        parameter.Value = SyncTypeConverter.TryConvertTo<Guid>(value).ToByteArray();
+                        return;
+                    }
+
+                    // genuine binary column (or raw filter param): byte[] passes through,
+                    // strings arrive base64-encoded from the serializer
+                    parameter.Value = value is byte[] bytes ? bytes : SyncTypeConverter.TryConvertFromDbType(value, DbType.Binary);
+                    return;
+                }
+
+                // Oracle has no boolean: NUMBER(1) with 0/1
+                if (value is bool boolValue)
+                {
+                    parameter.Value = boolValue ? 1 : 0;
+                    return;
+                }
             }
 
-            parameter.Value = SyncTypeConverter.TryConvertFromDbType(value, parameter.DbType);
+            // convert on the COLUMN's schema type when known; parameter.DbType is not
+            // trustworthy for provider-specific types (Raw -> Binary, Clob -> Object)
+            var column = string.IsNullOrEmpty(parameter.SourceColumn) ? null : this.TableDescription.Columns[parameter.SourceColumn];
+
+            parameter.Value = column != null
+                ? SyncTypeConverter.TryConvertFromDbType(value, column.GetDbType())
+                : SyncTypeConverter.TryConvertFromDbType(value, parameter.DbType);
         }
 
         /// <inheritdoc/>
@@ -119,8 +287,17 @@ namespace Dotmim.Sync.Oracle
             if (command is OracleCommand oracleCommand)
                 oracleCommand.BindByName = true;
 
+            // Defensive net: strip parameters that have no matching bind variable in the SQL.
+            // GetCommand already creates exactly the right parameters, but interceptors or future
+            // framework versions may add extras that would cause ORA-01036.
+            for (var i = command.Parameters.Count - 1; i >= 0; i--)
+            {
+                var name = command.Parameters[i].ParameterName.TrimStart(':', '@');
+                if (!Regex.IsMatch(command.CommandText, $@":{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
+                    command.Parameters.RemoveAt(i);
+            }
+
             // Coerce boolean parameters to NUMBER(1) before the command is prepared.
-            // (DbType.Guid is handled natively by ODP.NET as RAW(16).)
             foreach (DbParameter parameter in command.Parameters)
             {
                 if (parameter is OracleParameter oracleParameter && oracleParameter.DbType == DbType.Boolean)

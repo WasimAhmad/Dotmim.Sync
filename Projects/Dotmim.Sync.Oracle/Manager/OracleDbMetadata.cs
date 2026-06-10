@@ -68,14 +68,18 @@ namespace Dotmim.Sync.Oracle.Manager
             }
         }
 
-        /// <inheritdoc/>
-        public override object GetOwnerDbType(SyncColumn columnDefinition)
+        /// <summary>
+        /// Maps a managed <see cref="DbType"/> to the <see cref="OracleDbType"/> used for
+        /// parameter binding. <see cref="DbType.Guid"/> maps to RAW(16): ODP.NET rejects
+        /// DbType.Guid on parameters, so Guid values bind as <c>Guid.ToByteArray()</c>.
+        /// </summary>
+        public OracleDbType GetOracleDbType(DbType dbType, int maxLength = 0)
         {
-            switch (columnDefinition.GetDbType())
+            switch (dbType)
             {
                 case DbType.AnsiString:
                 case DbType.String:
-                    return columnDefinition.MaxLength > 0 && columnDefinition.MaxLength <= 4000 ? OracleDbType.Varchar2 : OracleDbType.Clob;
+                    return maxLength > 0 && maxLength <= 4000 ? OracleDbType.Varchar2 : OracleDbType.Clob;
                 case DbType.AnsiStringFixedLength:
                 case DbType.StringFixedLength:
                     return OracleDbType.Char;
@@ -109,13 +113,17 @@ namespace Dotmim.Sync.Oracle.Manager
                 case DbType.Guid:
                     return OracleDbType.Raw;
                 case DbType.Binary:
-                    return columnDefinition.MaxLength > 0 && columnDefinition.MaxLength <= 2000 ? OracleDbType.Raw : OracleDbType.Blob;
+                    return maxLength > 0 && maxLength <= 2000 ? OracleDbType.Raw : OracleDbType.Blob;
                 case DbType.Xml:
                     return OracleDbType.Clob;
                 default:
                     return OracleDbType.Varchar2;
             }
         }
+
+        /// <inheritdoc/>
+        public override object GetOwnerDbType(SyncColumn columnDefinition)
+            => this.GetOracleDbType(columnDefinition.GetDbType(), columnDefinition.MaxLength);
 
         /// <inheritdoc/>
         public override DbType GetDbType(SyncColumn columnDefinition) => columnDefinition.GetDbType();
