@@ -165,5 +165,50 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
 
             Assert.Contains("= 'O''Brien'", sql);
         }
+
+        [Fact]
+        public void CreateTrackingTableScript_CreatesTableAndTimestampIndex()
+        {
+            var script = BuildObjectNames().CreateTrackingTableScript(_ => "RAW(16)");
+
+            // two DDL statements wrapped in one PL/SQL block (Oracle cannot batch DDL)
+            Assert.Contains("EXECUTE IMMEDIATE 'CREATE TABLE", script);
+            Assert.Contains("EXECUTE IMMEDIATE 'CREATE INDEX", script);
+            Assert.Contains("(\"timestamp\")", script);
+            Assert.StartsWith("BEGIN", script.TrimStart());
+        }
+
+        [Fact]
+        public void GetTriggerCommandName_ThrowsWhenIdentifierExceeds128Bytes()
+        {
+            var longName = new string('X', 115); // + "_insert_trigger" => 130 chars > 128; + "_tracking" => 124 (ok)
+            var table = new SyncTable(longName);
+            table.Columns.Add(new SyncColumn("Id", typeof(int)));
+            table.PrimaryKeys.Add("Id");
+
+            var schema = new SyncSet();
+            schema.Tables.Add(table);
+
+            var scopeInfo = new ScopeInfo { Name = "DefaultScope", Setup = new SyncSetup(longName) };
+            var objectNames = new OracleObjectNames(table, scopeInfo);
+
+            Assert.Throws<ArgumentException>(() => objectNames.GetTriggerCommandName(DbTriggerType.Insert));
+        }
+
+        [Fact]
+        public void Constructor_ThrowsWhenTrackingTableNameExceeds128Bytes()
+        {
+            var longName = new string('X', 125); // + "_tracking" => 134 chars > 128
+            var table = new SyncTable(longName);
+            table.Columns.Add(new SyncColumn("Id", typeof(int)));
+            table.PrimaryKeys.Add("Id");
+
+            var schema = new SyncSet();
+            schema.Tables.Add(table);
+
+            var scopeInfo = new ScopeInfo { Name = "DefaultScope", Setup = new SyncSetup(longName) };
+
+            Assert.Throws<ArgumentException>(() => new OracleObjectNames(table, scopeInfo));
+        }
     }
 }

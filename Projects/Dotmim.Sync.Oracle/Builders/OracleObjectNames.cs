@@ -70,7 +70,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var trackingTableParser = new TableParser(trackingTableNameString, LeftQuoteChar, RightQuoteChar);
 
-            this.TrackingTableName = trackingTableParser.TableName;
+            this.TrackingTableName = EnsureIdentifierLength(trackingTableParser.TableName);
             this.TrackingTableQuotedShortName = trackingTableParser.QuotedShortName;
             this.TrackingTableQuotedFullName = trackingTableParser.QuotedFullName;
         }
@@ -129,7 +129,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 _ => throw new ArgumentOutOfRangeException(nameof(triggerType)),
             };
 
-            return name;
+            return EnsureIdentifierLength(name);
         }
 
         /// <summary>
@@ -157,6 +157,19 @@ namespace Dotmim.Sync.Oracle.Builders
         // Identifier / clause helpers
         // ----------------------------------------------------------------------------------------
         private static string Quoted(string columnName) => $"\"{columnName}\"";
+
+        /// <summary>
+        /// Oracle 12.2+ limits identifiers to 128 bytes. Generated names (tracking table,
+        /// triggers, index, constraints) must fit; fail fast with a clear message instead
+        /// of an opaque ORA-00972.
+        /// </summary>
+        internal static string EnsureIdentifierLength(string identifier)
+        {
+            if (System.Text.Encoding.UTF8.GetByteCount(identifier) > 128)
+                throw new ArgumentException($"Generated Oracle identifier '{identifier}' exceeds the 128-byte limit. Use shorter table names or shorter tracking/trigger prefixes and suffixes.");
+
+            return identifier;
+        }
 
         private static string BindName(string columnName)
             => new ObjectParser(columnName, LeftQuoteChar, RightQuoteChar).NormalizedShortName;
@@ -463,25 +476,35 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
 
         /// <summary>
-        /// Builds the CREATE TABLE script for the tracking table (primary keys + sync metadata columns).
+        /// Builds a PL/SQL block creating the tracking table (primary keys + sync metadata
+        /// columns) and its timestamp index. Two EXECUTE IMMEDIATE calls because Oracle
+        /// cannot batch two DDL statements in a single command.
         /// </summary>
         public string CreateTrackingTableScript(Func<SyncColumn, string> columnTypeResolver)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine($"CREATE TABLE {this.TrackingTableQuotedFullName} (");
+            var createTable = new StringBuilder();
+            createTable.AppendLine($"CREATE TABLE {this.TrackingTableQuotedFullName} (");
 
             foreach (var pk in this.tableDescription.GetPrimaryKeysColumns())
-                sb.AppendLine($"  {Quoted(pk.ColumnName)} {columnTypeResolver(pk)} NOT NULL,");
+                createTable.AppendLine($"  {Quoted(pk.ColumnName)} {columnTypeResolver(pk)} NOT NULL,");
 
-            sb.AppendLine("  \"update_scope_id\" RAW(16) NULL,");
-            sb.AppendLine("  \"timestamp\" NUMBER(19) NULL,");
-            sb.AppendLine("  \"sync_row_is_tombstone\" NUMBER(1) DEFAULT 0 NOT NULL,");
-            sb.AppendLine("  \"last_change_datetime\" TIMESTAMP NULL,");
+            createTable.AppendLine("  \"update_scope_id\" RAW(16) NULL,");
+            createTable.AppendLine("  \"timestamp\" NUMBER(19) NULL,");
+            createTable.AppendLine("  \"sync_row_is_tombstone\" NUMBER(1) DEFAULT 0 NOT NULL,");
+            createTable.AppendLine("  \"last_change_datetime\" TIMESTAMP NULL,");
 
             var pkList = string.Join(", ", this.tableDescription.GetPrimaryKeysColumns().Select(c => Quoted(c.ColumnName)));
-            sb.AppendLine($"  CONSTRAINT {Quoted($"PK_{this.TrackingTableName}")} PRIMARY KEY ({pkList})");
-            sb.AppendLine(")");
+            createTable.AppendLine($"  CONSTRAINT {Quoted(EnsureIdentifierLength($"PK_{this.TrackingTableName}"))} PRIMARY KEY ({pkList})");
+            createTable.Append(')');
 
+            var indexName = EnsureIdentifierLength($"{this.TrackingTableName}_ts_idx");
+            var createIndex = $"CREATE INDEX {Quoted(indexName)} ON {this.TrackingTableQuotedFullName} (\"timestamp\")";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("BEGIN");
+            sb.AppendLine($"  EXECUTE IMMEDIATE '{createTable.ToString().Replace("'", "''")}';");
+            sb.AppendLine($"  EXECUTE IMMEDIATE '{createIndex.Replace("'", "''")}';");
+            sb.AppendLine("END;");
             return sb.ToString();
         }
 
