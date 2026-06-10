@@ -1,34 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFrameworks>netstandard2.1;net6.0;net7.0;net8.0</TargetFrameworks>
+		<!-- netstandard2.1 is the floor of Oracle.ManagedDataAccess.Core 3.x (not 2.0) -->
+		<TargetFrameworks>netstandard2.1;$(TargetFrameworkNet6);$(TargetFrameworkNet8)</TargetFrameworks>
+
 		<Authors>Sébastien Pertus, Waseem Ahmad Mughal</Authors>
 		<Company>Microsoft</Company>
-		<Description>Oracle Sync Provider for Dotmim.Sync, a .NET library for database synchronization.</Description>
-		<PackageProjectUrl>https://dotmimsync.readthedocs.io/</PackageProjectUrl>
-		<PackageIcon>database.png</PackageIcon>
-		<PackageTags>Dotmim.Sync, Sync, Provider, Oracle</PackageTags>
-		<PackageLicenseExpression>MIT</PackageLicenseExpression>
-		<RepositoryUrl>https://github.com/Mimetis/Dotmim.Sync</RepositoryUrl>
+		<Title>Dotmim.Sync.Oracle</Title>
+		<Summary>Oracle Sync Provider. Client or Server provider .Net Standard 2.1</Summary>
+		<Description>Oracle Sync Provider. Manage a sync process beetween two relational databases provider. This provider works with Oracle Database 19c+ and can be used as Client or Server provider .Net Standard 2.1</Description>
 		<RepositoryType>git</RepositoryType>
-		<Version>1.0.0</Version>
-		<LangVersion>10.0</LangVersion>
-		<Nullable>disable</Nullable>
+		<ApplicationIcon>favicon.ico</ApplicationIcon>
+		<PackageIcon>packageIcon.png</PackageIcon>
+	</PropertyGroup>
+	<PropertyGroup>
+		<NoWarn>$(NoWarn)SA0001;SA1202;CA1308;CA1305;CA1822;CA1834;SA1600;IDE0017;CA2249;CA1866;CA2100;CA1307;CA1310;</NoWarn>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\Dotmim.Sync.Core\Dotmim.Sync.Core.csproj" />
+		<None Include="..\..\docs\assets\packageIcon.png">
+			<Pack>True</Pack>
+			<PackagePath></PackagePath>
+		</None>
 	</ItemGroup>
 
 	<ItemGroup>
-		<None Include="..\..\docs\assets\database.png">
-			<Pack>True</Pack>
-			<PackagePath></PackagePath>
-		</None>
-		<None Include="favicon.ico">
-			<Pack>True</Pack>
-			<PackagePath></PackagePath>
-		</None>
+		<ProjectReference Include="..\Dotmim.Sync.Core\Dotmim.Sync.Core.csproj" />
+		<PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
 	</ItemGroup>
 
 	<ItemGroup>

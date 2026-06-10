@@ -108,7 +108,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
         /// <summary>
         /// Converts a 36-char guid-string bind into RAW(16) with the exact byte layout of
-        /// .NET's <see cref="Guid.ToByteArray"/> (fields 1-3 little-endian), so that values
+        /// .NET's <see cref="Guid.ToByteArray()"/> (fields 1-3 little-endian), so that values
         /// written here match the byte layout the sync adapter binds for Guid values
         /// (see OracleSyncAdapter) and what OracleDataReader.GetGuid reads back.
         /// ODP.NET rejects DbType.Guid on parameters, hence the string bind + SQL conversion.

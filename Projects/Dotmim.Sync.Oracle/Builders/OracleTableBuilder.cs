@@ -72,6 +72,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Schema (Oracle schema == user; not created here)
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override Task<DbCommand> GetCreateSchemaCommandAsync(DbConnection connection, DbTransaction transaction)
         {
@@ -100,6 +101,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Base table
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override Task<DbCommand> GetCreateTableCommandAsync(DbConnection connection, DbTransaction transaction)
         {
@@ -187,6 +189,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Stored procedures : not used by the Oracle provider
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override Task<DbCommand> GetExistsStoredProcedureCommandAsync(DbStoredProcedureType storedProcedureType, SyncFilter filter, DbConnection connection, DbTransaction transaction)
             => Task.FromResult<DbCommand>(null);
@@ -202,6 +205,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Tracking table
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override Task<DbCommand> GetCreateTrackingTableCommandAsync(DbConnection connection, DbTransaction transaction)
         {
@@ -227,6 +231,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Triggers
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override Task<DbCommand> GetExistsTriggerCommandAsync(DbTriggerType triggerType, DbConnection connection, DbTransaction transaction)
         {
@@ -263,6 +268,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         // Schema discovery
         // ----------------------------------------------------------------------------------------
+
         /// <inheritdoc/>
         public override async Task<IEnumerable<SyncColumn>> GetColumnsAsync(DbConnection connection, DbTransaction transaction)
         {
@@ -292,11 +298,11 @@ namespace Dotmim.Sync.Oracle.Builders
                 {
                     var columnName = reader.GetString(0);
                     var dataType = reader.GetString(1);
-                    var dataLength = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
-                    var precision = reader.IsDBNull(3) ? (byte)0 : Convert.ToByte(reader.GetValue(3));
-                    var scale = reader.IsDBNull(4) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
+                    var dataLength = await reader.IsDBNullAsync(2).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                    var precision = await reader.IsDBNullAsync(3).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(3));
+                    var scale = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
                     var allowNull = reader.GetString(5) == "Y";
-                    var charLength = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6));
+                    var charLength = await reader.IsDBNullAsync(6).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(6));
 
                     var column = new SyncColumn(columnName)
                     {
@@ -316,7 +322,7 @@ namespace Dotmim.Sync.Oracle.Builders
             finally
             {
                 if (!alreadyOpened && connection.State == ConnectionState.Open)
-                    connection.Close();
+                    await connection.CloseAsync().ConfigureAwait(false);
             }
 
             return columns;
@@ -359,7 +365,7 @@ namespace Dotmim.Sync.Oracle.Builders
             finally
             {
                 if (!alreadyOpened && connection.State == ConnectionState.Open)
-                    connection.Close();
+                    await connection.CloseAsync().ConfigureAwait(false);
             }
 
             return primaryKeys;
@@ -446,7 +452,7 @@ namespace Dotmim.Sync.Oracle.Builders
             finally
             {
                 if (!alreadyOpened && connection.State == ConnectionState.Open)
-                    connection.Close();
+                    await connection.CloseAsync().ConfigureAwait(false);
             }
 
             return relations;

@@ -117,10 +117,10 @@ namespace Dotmim.Sync.Oracle.Builders
                     while (await reader.ReadAsync().ConfigureAwait(false))
                     {
                         var dataType = reader.GetString(1);
-                        var dataLength = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
-                        var precision = reader.IsDBNull(3) ? (byte)0 : Convert.ToByte(reader.GetValue(3));
-                        var scale = reader.IsDBNull(4) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
-                        var charLength = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6));
+                        var dataLength = await reader.IsDBNullAsync(2).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                        var precision = await reader.IsDBNullAsync(3).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(3));
+                        var scale = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
+                        var charLength = await reader.IsDBNullAsync(6).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(6));
                         var column = new SyncColumn(reader.GetString(0))
                         {
                             OriginalTypeName = dataType,
