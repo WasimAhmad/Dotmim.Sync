@@ -419,7 +419,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
         private string CreateDisableConstraintsCommand()
         {
-            var tableName = this.TableName;
+            var tableName = this.TableName.Replace("'", "''");
             var sb = new StringBuilder();
             sb.AppendLine("BEGIN");
             sb.AppendLine("  FOR c IN (SELECT table_name, constraint_name FROM user_constraints");
@@ -434,18 +434,21 @@ namespace Dotmim.Sync.Oracle.Builders
             return sb.ToString();
         }
 
+        // Oracle's bare ENABLE CONSTRAINT means ENABLE VALIDATE, which rescans all rows and
+        // fails on orphans mid-sync; SqlServer re-enables with NOCHECK semantics — NOVALIDATE
+        // is the parity behavior.
         private string CreateEnableConstraintsCommand()
         {
-            var tableName = this.TableName;
+            var tableName = this.TableName.Replace("'", "''");
             var sb = new StringBuilder();
             sb.AppendLine("BEGIN");
             sb.AppendLine($"  FOR c IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}' AND constraint_type = 'R') LOOP");
-            sb.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.TableQuotedFullName} ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine($"    EXECUTE IMMEDIATE 'ALTER TABLE {this.TableQuotedFullName} ENABLE NOVALIDATE CONSTRAINT \"' || c.constraint_name || '\"';");
             sb.AppendLine("  END LOOP;");
             sb.AppendLine("  FOR c IN (SELECT table_name, constraint_name FROM user_constraints");
             sb.AppendLine($"            WHERE r_constraint_name IN (SELECT constraint_name FROM user_constraints WHERE table_name = '{tableName}')");
             sb.AppendLine("            AND constraint_type = 'R') LOOP");
-            sb.AppendLine("    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" ENABLE CONSTRAINT \"' || c.constraint_name || '\"';");
+            sb.AppendLine("    EXECUTE IMMEDIATE 'ALTER TABLE \"' || c.table_name || '\" ENABLE NOVALIDATE CONSTRAINT \"' || c.constraint_name || '\"';");
             sb.AppendLine("  END LOOP;");
             sb.AppendLine("END;");
             return sb.ToString();

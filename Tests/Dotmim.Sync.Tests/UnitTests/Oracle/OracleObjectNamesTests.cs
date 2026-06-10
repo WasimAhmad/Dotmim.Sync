@@ -123,5 +123,20 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             var timestampGuard = sql.IndexOf("side.\"timestamp\" > :sync_min_timestamp", StringComparison.Ordinal);
             Assert.True(tombstoneClose < timestampGuard, $"guard ordering wrong:\n{sql}");
         }
+
+        [Fact]
+        public void EnableConstraints_UsesNovalidate()
+        {
+            var sql = BuildObjectNames().GetCommandText(DbCommandType.EnableConstraints);
+            Assert.Contains("ENABLE NOVALIDATE CONSTRAINT", sql);
+            Assert.DoesNotContain(" ENABLE CONSTRAINT ", sql);
+        }
+
+        [Fact]
+        public void ConstraintCommands_EmbedTableNameAsEscapedLiteral()
+        {
+            var sql = BuildObjectNames().GetCommandText(DbCommandType.DisableConstraints);
+            Assert.Contains("= 'Product'", sql);
+        }
     }
 }
