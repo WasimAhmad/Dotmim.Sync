@@ -377,8 +377,9 @@ namespace Dotmim.Sync.Oracle.Builders
         /// </summary>
         public override async Task<SyncTable> GetTableAsync(string tableName, string schemaName, DbConnection connection, DbTransaction transaction = null)
         {
-            var tableParser = new TableParser(tableName, '"', '"');
-            var parsedName = tableParser.TableName;
+            // TableParser is a ref struct and cannot be used in async methods (C# < 13).
+            // Extract the parsed name in a non-async local helper.
+            string parsedName = GetParsedTableName(tableName);
             var syncTable = string.IsNullOrEmpty(schemaName) ? new SyncTable(parsedName) : new SyncTable(parsedName, schemaName);
 
             var alreadyOpened = connection.State == ConnectionState.Open;
@@ -536,6 +537,12 @@ namespace Dotmim.Sync.Oracle.Builders
                         }
                     }
                 }).Unwrap();
+        }
+
+        private static string GetParsedTableName(string tableName)
+        {
+            var tableParser = new TableParser(tableName, '"', '"');
+            return tableParser.TableName;
         }
 
         /// <summary>

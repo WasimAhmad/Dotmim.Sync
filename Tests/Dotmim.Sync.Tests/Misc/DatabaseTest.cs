@@ -6,6 +6,7 @@ using MySqlConnector;
 using MySql.Data.MySqlClient;
 #endif
 using Npgsql;
+using Oracle.ManagedDataAccess.Client;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -171,6 +172,7 @@ namespace Dotmim.Sync.Tests.Misc
             SqlConnection.ClearAllPools();
             MySqlConnection.ClearAllPools();
             NpgsqlConnection.ClearAllPools();
+            OracleConnection.ClearAllPools();
 
             await CreateDatabasesAsync();
 
@@ -198,6 +200,11 @@ namespace Dotmim.Sync.Tests.Misc
         {
             var (serverProviderType, serverDatabaseName) = HelperDatabase.GetDatabaseType(GetServerProvider());
             var serverProvider = GetServerProvider();
+
+            // Oracle requires the schema/user to be created by an admin first before EF can create tables
+            if (serverProviderType == ProviderType.Oracle)
+                await HelperDatabase.CreateDatabaseAsync(serverProviderType, serverDatabaseName, true);
+
             using (var ctx = new AdventureWorksContext(serverProvider, true))
             {
                 await ctx.Database.EnsureCreatedAsync();
@@ -209,6 +216,11 @@ namespace Dotmim.Sync.Tests.Misc
             foreach (var clientProvider in GetClientProviders())
             {
                 var (clientProviderType, clientDatabaseName) = HelperDatabase.GetDatabaseType(clientProvider);
+
+                // Oracle requires the schema/user to be created by an admin first before EF can create tables
+                if (clientProviderType == ProviderType.Oracle)
+                    await HelperDatabase.CreateDatabaseAsync(clientProviderType, clientDatabaseName, true);
+
                 using var cliCtx = new AdventureWorksContext(clientProvider);
                 await cliCtx.Database.EnsureCreatedAsync();
 

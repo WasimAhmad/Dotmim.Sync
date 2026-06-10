@@ -550,4 +550,42 @@ namespace Dotmim.Sync.Tests
             yield return HelperDatabase.GetSyncProvider(ProviderType.MariaDB, mariaClientRandomDatabaseName, false);
         }
     }
+
+    public class OracleTcpTests : TcpTests
+    {
+        public OracleTcpTests(ITestOutputHelper output, DatabaseServerFixture fixture)
+            : base(output, fixture)
+        {
+        }
+
+        public override ProviderType ServerProviderType => ProviderType.Oracle;
+
+        private string sqliteRandomDatabaseName = HelperDatabase.GetRandomName("tcp_ora_sqlite_");
+        private string oracleClientRandomDatabaseName = HelperDatabase.GetRandomName("tcp_ora_");
+
+        public override IEnumerable<CoreProvider> GetClientProviders()
+        {
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Sqlite, this.sqliteRandomDatabaseName, false);
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Oracle, this.oracleClientRandomDatabaseName, false);
+        }
+    }
+
+    public class OracleConflictTests : TcpConflictsTests
+    {
+        public OracleConflictTests(ITestOutputHelper output, DatabaseServerFixture fixture)
+            : base(output, fixture)
+        {
+        }
+
+        public override ProviderType ServerProviderType => ProviderType.Oracle;
+
+        private string sqliteRandomDatabaseName = HelperDatabase.GetRandomName("tcpc_ora_sqlite_");
+        private string oracleClientRandomDatabaseName = HelperDatabase.GetRandomName("tcpc_ora_");
+
+        public override IEnumerable<CoreProvider> GetClientProviders()
+        {
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Sqlite, this.sqliteRandomDatabaseName, false);
+            yield return HelperDatabase.GetSyncProvider(ProviderType.Oracle, this.oracleClientRandomDatabaseName, false);
+        }
+    }
 }

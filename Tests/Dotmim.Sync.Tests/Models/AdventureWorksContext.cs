@@ -97,6 +97,14 @@ namespace Dotmim.Sync.Tests.Models
                         else
                             optionsBuilder.UseNpgsql(this.ConnectionString);
                         break;
+#if NET6_0 || NET8_0
+                    case ProviderType.Oracle:
+                        if (this.Connection != null)
+                            optionsBuilder.UseOracle(this.Connection);
+                        else
+                            optionsBuilder.UseOracle(this.ConnectionString);
+                        break;
+#endif
                 }
             }
 
