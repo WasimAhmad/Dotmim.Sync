@@ -1,816 +1,382 @@
 using Dotmim.Sync.Builders;
+using Dotmim.Sync.DatabaseStringParsers;
 using Oracle.ManagedDataAccess.Client;
 using System;
-using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
-using System.Globalization;
-using System.Text;
-using System.Threading.Tasks;
-using Dotmim.Sync.DatabaseStringParsers;
 
 namespace Dotmim.Sync.Oracle.Builders
 {
     /// <summary>
-    /// Oracle implementation for the DbScopeBuilder.
-    /// Handles scope info table creation and maintenance for Oracle database.
+    /// Oracle implementation of the DbScopeBuilder, aligned with the framework's v1.x
+    /// scope model:
+    /// <para>
+    /// - <c>scope_info</c> is keyed by <c>sync_scope_name</c> only.
+    /// - <c>scope_info_client</c> is keyed by (<c>sync_scope_id</c>, <c>sync_scope_name</c>,
+    ///   <c>sync_scope_hash</c>).
+    /// - Every parameter uses the canonical name expected by
+    ///   <c>BaseOrchestrator.InternalSetParameterValue</c> (prefixed with <c>:</c>).
+    /// - Insert/Update commands return the saved row as a result set through
+    ///   <c>DBMS_SQL.RETURN_RESULT</c> (Oracle 12.1+), because the orchestrator reads the
+    ///   row back with ExecuteReader and Oracle cannot batch a trailing SELECT.
+    /// </para>
     /// </summary>
     public class OracleScopeBuilder : DbScopeBuilder
     {
+        private const char QuoteChar = '"';
+
+        private const string ScopeInfoColumns =
+            "\"sync_scope_name\", \"sync_scope_schema\", \"sync_scope_setup\", \"sync_scope_version\", " +
+            "\"sync_scope_last_clean_timestamp\", \"sync_scope_properties\"";
+
+        private const string ScopeInfoClientColumns =
+            "\"sync_scope_id\", \"sync_scope_name\", \"sync_scope_hash\", \"sync_scope_parameters\", " +
+            "\"scope_last_sync_timestamp\", \"scope_last_server_sync_timestamp\", \"scope_last_sync_duration\", " +
+            "\"scope_last_sync\", \"sync_scope_errors\", \"sync_scope_properties\"";
+
         private readonly string tableName;
         private readonly string clientTableName;
         private readonly DbTableNames scopeInfoTableNames;
         private readonly DbTableNames scopeInfoClientTableNames;
-        private const string leftQuote = "\"";
-        private const string rightQuote = "\"";
 
         /// <summary>
         /// Initializes a new instance of the <see cref="OracleScopeBuilder"/> class.
         /// </summary>
-        /// <param name="scopeInfoTableName">The name of the scope info table.</param>
-        public OracleScopeBuilder(string scopeInfoTableName) : base()
+        public OracleScopeBuilder(string scopeInfoTableName)
+            : base()
         {
-            // Validate table names to prevent SQL injection
             if (string.IsNullOrEmpty(scopeInfoTableName) || !System.Text.RegularExpressions.Regex.IsMatch(scopeInfoTableName, @"^[A-Za-z0-9_]+$"))
                 throw new ArgumentException("Invalid scope info table name format", nameof(scopeInfoTableName));
-                
+
             this.tableName = scopeInfoTableName;
             this.clientTableName = $"{scopeInfoTableName}_client";
 
-            // Create table names for scope_info
-            var parser = new ObjectParser(this.tableName, leftQuote[0], rightQuote[0]);
+            var parser = new ObjectParser(this.tableName, QuoteChar, QuoteChar);
             this.scopeInfoTableNames = new DbTableNames(
-                leftQuote[0], rightQuote[0],
-                this.tableName,
-                this.tableName,
-                parser.NormalizedShortName,
-                $"{leftQuote}{this.tableName}{rightQuote}",
-                parser.QuotedShortName,
-                string.Empty);
-                
-            // Create table names for scope_info_client
-            var clientParser = new ObjectParser(this.clientTableName, leftQuote[0], rightQuote[0]);
+                QuoteChar, QuoteChar, this.tableName, this.tableName,
+                parser.NormalizedShortName, $"\"{this.tableName}\"", parser.QuotedShortName, string.Empty);
+
+            var clientParser = new ObjectParser(this.clientTableName, QuoteChar, QuoteChar);
             this.scopeInfoClientTableNames = new DbTableNames(
-                leftQuote[0], rightQuote[0],
-                this.clientTableName,
-                this.clientTableName,
-                clientParser.NormalizedShortName,
-                $"{leftQuote}{this.clientTableName}{rightQuote}",
-                clientParser.QuotedShortName,
-                string.Empty);
+                QuoteChar, QuoteChar, this.clientTableName, this.clientTableName,
+                clientParser.NormalizedShortName, $"\"{this.clientTableName}\"", clientParser.QuotedShortName, string.Empty);
         }
 
-        /// <summary>
-        /// Gets the table names for the scope info table.
-        /// </summary>
-        /// <returns>The table names for the scope info table.</returns>
+        /// <inheritdoc/>
         public override DbTableNames GetParsedScopeInfoTableNames() => this.scopeInfoTableNames;
 
-        /// <summary>
-        /// Gets the table names for the scope info client table.
-        /// </summary>
-        /// <returns>The table names for the scope info client table.</returns>
+        /// <inheritdoc/>
         public override DbTableNames GetParsedScopeInfoClientTableNames() => this.scopeInfoClientTableNames;
 
-        /// <summary>
-        /// Gets the local timestamp from the Oracle database.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A tuple containing the system change number as a string and a validity flag.</returns>
-        public static async Task<(string Hash, bool IsValid)> GetLocalTimestampAsync(DbConnection connection, DbTransaction transaction = null)
+        // ----------------------------------------------------------------------------------------
+        // Helpers
+        // ----------------------------------------------------------------------------------------
+        private static DbCommand CreateCommand(DbConnection connection, DbTransaction transaction, string commandText)
         {
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            command.CommandText = commandText;
+
+            // Named binds everywhere; ODP.NET binds by position unless this is set.
             if (command is OracleCommand oracleCommand)
                 oracleCommand.BindByName = true;
-            command.CommandText = $"SELECT {OracleObjectNames.TimestampValue} FROM DUAL";
 
-            try
-            {
-                bool alreadyOpened = connection.State == ConnectionState.Open;
-
-                if (!alreadyOpened)
-                    await connection.OpenAsync().ConfigureAwait(false);
-
-                var result = await command.ExecuteScalarAsync().ConfigureAwait(false);
-
-                if (!alreadyOpened)
-                    await connection.CloseAsync().ConfigureAwait(false);
-
-                if (result != null && result != DBNull.Value)
-                {
-                    var scn = Convert.ToInt64(result);
-                    return (scn.ToString(), true);
-                }
-                else
-                {
-                    return (string.Empty, false);
-                }
-            }
-            catch (Exception)
-            {
-                throw;
-            }
+            return command;
         }
 
-        /// <summary>
-        /// Determines if the scope info table needs to be created.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>True if the table needs to be created; otherwise, false.</returns>
-        public async Task<bool> NeedToCreateScopeInfoTableAsync(DbConnection connection, DbTransaction transaction = null)
+        private static void AddParameter(DbCommand command, string name, DbType dbType, bool isClob = false, int size = 0)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT COUNT(*) 
-                FROM USER_TABLES 
-                WHERE TABLE_NAME = :tableName";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $":{name}";
+
+            // ODP.NET rejects DbType.Guid; map it to OracleDbType.Raw (16 bytes = RAW(16)).
+            if (dbType == DbType.Guid && parameter is OracleParameter guidParam)
+            {
+                guidParam.OracleDbType = OracleDbType.Raw;
+                guidParam.Size = 16;
+            }
+            else
+            {
+                parameter.DbType = dbType;
+
+                if (size > 0)
+                    parameter.Size = size;
+
+                // JSON payloads (schema/setup/parameters/errors/properties) can exceed the
+                // VARCHAR2 bind limit; bind them as CLOB.
+                if (isClob && parameter is OracleParameter oracleParameter)
+                    oracleParameter.OracleDbType = OracleDbType.Clob;
+            }
+
+            command.Parameters.Add(parameter);
+        }
+
+        private static void AddScopeInfoSaveParameters(DbCommand command)
+        {
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
+            AddParameter(command, "sync_scope_schema", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_setup", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_version", DbType.String, size: 10);
+            AddParameter(command, "sync_scope_last_clean_timestamp", DbType.Int64);
+            AddParameter(command, "sync_scope_properties", DbType.String, isClob: true);
+        }
+
+        private static void AddScopeInfoClientSaveParameters(DbCommand command)
+        {
+            AddParameter(command, "sync_scope_id", DbType.Guid);
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
+            AddParameter(command, "sync_scope_hash", DbType.String, size: 100);
+            AddParameter(command, "sync_scope_parameters", DbType.String, isClob: true);
+            AddParameter(command, "scope_last_sync_timestamp", DbType.Int64);
+            AddParameter(command, "scope_last_server_sync_timestamp", DbType.Int64);
+            AddParameter(command, "scope_last_sync_duration", DbType.Int64);
+            AddParameter(command, "scope_last_sync", DbType.DateTime);
+            AddParameter(command, "sync_scope_errors", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_properties", DbType.String, isClob: true);
+        }
+
+        private static void AddScopeInfoClientKeyParameters(DbCommand command)
+        {
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
+            AddParameter(command, "sync_scope_id", DbType.Guid);
+            AddParameter(command, "sync_scope_hash", DbType.String, size: 100);
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Tables : exists / create / drop
+        // ----------------------------------------------------------------------------------------
+        private static DbCommand CreateExistsTableCommand(DbConnection connection, DbTransaction transaction, string unquotedTableName)
+        {
+            // Tables are created quoted (case-preserved), so USER_TABLES stores the exact
+            // string; compare it case-preserved as well (never upper-cased).
+            var command = CreateCommand(connection, transaction,
+                "SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = :tableName");
 
             var parameter = command.CreateParameter();
             parameter.ParameterName = ":tableName";
-            parameter.Value = this.tableName.ToUpper(CultureInfo.InvariantCulture); // Oracle stores identifiers in upper case by default
+            parameter.Value = unquotedTableName;
             command.Parameters.Add(parameter);
 
-            try
-            {
-                bool alreadyOpened = connection.State == ConnectionState.Open;
-
-                if (!alreadyOpened)
-                    await connection.OpenAsync().ConfigureAwait(false);
-
-                var result = await command.ExecuteScalarAsync().ConfigureAwait(false);
-
-                if (!alreadyOpened)
-                    await connection.CloseAsync().ConfigureAwait(false);
-
-                int count = Convert.ToInt32(result);
-                return count == 0; // Need to create only if it doesn't exist
-            }
-            catch (Exception)
-            {
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Creates the SQL script for the scope info table.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>The SQL script as a string.</returns>
-        public string CreateScopeInfoTableScriptAsync(DbConnection connection, DbTransaction transaction = null)
-        {
-            var stringBuilder = new StringBuilder();
-
-            // Create the scope info table
-            stringBuilder.AppendLine($"CREATE TABLE \"{this.tableName}\" (");
-            stringBuilder.AppendLine($"  \"sync_scope_id\" RAW(16) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_name\" VARCHAR2(100) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_schema\" CLOB NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_setup\" CLOB NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_version\" VARCHAR2(10) NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_server_sync_timestamp\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync_timestamp\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync_duration\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync\" TIMESTAMP NULL,");
-            stringBuilder.AppendLine($"  CONSTRAINT \"PK_{this.tableName}\" PRIMARY KEY (\"sync_scope_id\", \"sync_scope_name\")");
-            stringBuilder.AppendLine($")");
-
-            return stringBuilder.ToString();
-        }
-
-        /// <summary>
-        /// Gets a command to delete a scope info client record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetDeleteScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
-        {
-            // Validate table name to prevent SQL injection
-            if (string.IsNullOrEmpty(this.clientTableName) || !System.Text.RegularExpressions.Regex.IsMatch(this.clientTableName, @"^[A-Za-z0-9_]+$"))
-                throw new ArgumentException("Invalid client table name format");
-
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                DELETE FROM ""{this.clientTableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId AND ""sync_scope_client_id"" = :clientId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            var clientIdParam = command.CreateParameter();
-            clientIdParam.ParameterName = ":clientId";
-            clientIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(clientIdParam);
-
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to insert a scope info record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetInsertScopeInfoCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                INSERT INTO ""{this.tableName}"" 
-                (""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
-                 ""sync_scope_last_server_sync_timestamp"", ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync"")
-                VALUES 
-                (:scopeId, :scopeName, :schema, :setup, :version, 
-                 :lastServerSyncTimestamp, :lastSyncTimestamp, :lastSyncDuration, :lastSync)";
-
-            AddScopeInfoParameters(command);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to insert a scope info client record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetInsertScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                INSERT INTO ""{this.clientTableName}"" 
-                (""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", ""sync_scope_parameters"", 
-                 ""sync_scope_filters"", ""sync_scope_properties"", ""sync_scope_last_client_sync_timestamp"", ""sync_scope_last_server_sync_timestamp"", 
-                 ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync"")
-                VALUES 
-                (:scopeId, :scopeName, :clientId, :clientName, :parameters, 
-                 :filters, :properties, :lastClientSyncTimestamp, :lastServerSyncTimestamp, 
-                 :lastSyncTimestamp, :lastSyncDuration, :lastSync)";
-
-            AddScopeInfoClientParameters(command);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Helper method to create parameters for the ScopeInfo commands
-        /// </summary>
-        private static void AddScopeInfoParameters(DbCommand command)
-        {
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var schemaParam = command.CreateParameter();
-            schemaParam.ParameterName = ":schema";
-            schemaParam.DbType = DbType.String;
-            if (schemaParam is OracleParameter schemaClob)
-                schemaClob.OracleDbType = OracleDbType.Clob;
-            command.Parameters.Add(schemaParam);
-
-            var setupParam = command.CreateParameter();
-            setupParam.ParameterName = ":setup";
-            setupParam.DbType = DbType.String;
-            if (setupParam is OracleParameter setupClob)
-                setupClob.OracleDbType = OracleDbType.Clob;
-            command.Parameters.Add(setupParam);
-
-            var versionParam = command.CreateParameter();
-            versionParam.ParameterName = ":version";
-            versionParam.DbType = DbType.String;
-            command.Parameters.Add(versionParam);
-
-            var lastServerSyncTimestampParam = command.CreateParameter();
-            lastServerSyncTimestampParam.ParameterName = ":lastServerSyncTimestamp";
-            lastServerSyncTimestampParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastServerSyncTimestampParam);
-
-            var lastSyncTimestampParam = command.CreateParameter();
-            lastSyncTimestampParam.ParameterName = ":lastSyncTimestamp";
-            lastSyncTimestampParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastSyncTimestampParam);
-
-            var lastSyncDurationParam = command.CreateParameter();
-            lastSyncDurationParam.ParameterName = ":lastSyncDuration";
-            lastSyncDurationParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastSyncDurationParam);
-
-            var lastSyncParam = command.CreateParameter();
-            lastSyncParam.ParameterName = ":lastSync";
-            lastSyncParam.DbType = DbType.DateTime;
-            command.Parameters.Add(lastSyncParam);
-        }
-
-        /// <summary>
-        /// Helper method to create parameters for the ScopeInfoClient commands
-        /// </summary>
-        private static void AddScopeInfoClientParameters(DbCommand command)
-        {
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var clientIdParam = command.CreateParameter();
-            clientIdParam.ParameterName = ":clientId";
-            clientIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(clientIdParam);
-
-            var clientNameParam = command.CreateParameter();
-            clientNameParam.ParameterName = ":clientName";
-            clientNameParam.DbType = DbType.String;
-            command.Parameters.Add(clientNameParam);
-
-            var parametersParam = command.CreateParameter();
-            parametersParam.ParameterName = ":parameters";
-            parametersParam.DbType = DbType.String;
-            if (parametersParam is OracleParameter parametersClob)
-                parametersClob.OracleDbType = OracleDbType.Clob;
-            command.Parameters.Add(parametersParam);
-
-            var filtersParam = command.CreateParameter();
-            filtersParam.ParameterName = ":filters";
-            filtersParam.DbType = DbType.String;
-            if (filtersParam is OracleParameter filtersClob)
-                filtersClob.OracleDbType = OracleDbType.Clob;
-            command.Parameters.Add(filtersParam);
-
-            var propertiesParam = command.CreateParameter();
-            propertiesParam.ParameterName = ":properties";
-            propertiesParam.DbType = DbType.String;
-            if (propertiesParam is OracleParameter propertiesClob)
-                propertiesClob.OracleDbType = OracleDbType.Clob;
-            command.Parameters.Add(propertiesParam);
-
-            var lastClientSyncTimestampParam = command.CreateParameter();
-            lastClientSyncTimestampParam.ParameterName = ":lastClientSyncTimestamp";
-            lastClientSyncTimestampParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastClientSyncTimestampParam);
-
-            var lastServerSyncTimestampParam = command.CreateParameter();
-            lastServerSyncTimestampParam.ParameterName = ":lastServerSyncTimestamp";
-            lastServerSyncTimestampParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastServerSyncTimestampParam);
-
-            var lastSyncTimestampParam = command.CreateParameter();
-            lastSyncTimestampParam.ParameterName = ":lastSyncTimestamp";
-            lastSyncTimestampParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastSyncTimestampParam);
-
-            var lastSyncDurationParam = command.CreateParameter();
-            lastSyncDurationParam.ParameterName = ":lastSyncDuration";
-            lastSyncDurationParam.DbType = DbType.Int64;
-            command.Parameters.Add(lastSyncDurationParam);
-
-            var lastSyncParam = command.CreateParameter();
-            lastSyncParam.ParameterName = ":lastSync";
-            lastSyncParam.DbType = DbType.DateTime;
-            command.Parameters.Add(lastSyncParam);
-        }
-
-        /// <summary>
-        /// Gets a command to delete a scope info record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetDeleteScopeInfoCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                DELETE FROM ""{this.tableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to check if a scope info exists.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetExistsScopeInfoCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT COUNT(*) 
-                FROM ""{this.tableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to check if a scope info client exists.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetExistsScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT COUNT(*) 
-                FROM ""{this.clientTableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId AND ""sync_scope_client_id"" = :clientId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            var clientIdParam = command.CreateParameter();
-            clientIdParam.ParameterName = ":clientId";
-            clientIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(clientIdParam);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to check if the scope info table exists.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetExistsScopeInfoTableCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT COUNT(*) 
-                FROM USER_TABLES 
-                WHERE TABLE_NAME = :tableName";
+            => CreateExistsTableCommand(connection, transaction, this.tableName);
 
-            var parameter = command.CreateParameter();
-            parameter.ParameterName = ":tableName";
-            parameter.Value = this.tableName.ToUpper(CultureInfo.InvariantCulture); // Oracle stores identifiers in upper case by default
-            command.Parameters.Add(parameter);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to check if the scope info client table exists.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetExistsScopeInfoClientTableCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT COUNT(*) 
-                FROM USER_TABLES 
-                WHERE TABLE_NAME = :tableName";
+            => CreateExistsTableCommand(connection, transaction, this.clientTableName);
 
-            var parameter = command.CreateParameter();
-            parameter.ParameterName = ":tableName";
-            parameter.Value = this.clientTableName.ToUpper(CultureInfo.InvariantCulture); // Oracle stores identifiers in upper case by default
-            command.Parameters.Add(parameter);
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to create the scope info table.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetCreateScopeInfoTableCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = CreateScopeInfoTableScriptAsync(connection, transaction);
-            return command;
+            var commandText =
+$@"CREATE TABLE ""{this.tableName}"" (
+  ""sync_scope_name"" VARCHAR2(100) NOT NULL,
+  ""sync_scope_schema"" CLOB NULL,
+  ""sync_scope_setup"" CLOB NULL,
+  ""sync_scope_version"" VARCHAR2(10) NULL,
+  ""sync_scope_last_clean_timestamp"" NUMBER(19) NULL,
+  ""sync_scope_properties"" CLOB NULL,
+  CONSTRAINT ""PK_{this.tableName}"" PRIMARY KEY (""sync_scope_name"")
+)";
+            return CreateCommand(connection, transaction, commandText);
         }
 
-        /// <summary>
-        /// Gets a command to create the scope info client table.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetCreateScopeInfoClientTableCommand(DbConnection connection, DbTransaction transaction)
         {
-            var stringBuilder = new StringBuilder();
-
-            // Create the scope info client table
-            stringBuilder.AppendLine($"CREATE TABLE \"{this.clientTableName}\" (");
-            stringBuilder.AppendLine($"  \"sync_scope_id\" RAW(16) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_name\" VARCHAR2(100) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_client_id\" RAW(16) NOT NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_client_name\" VARCHAR2(100) NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_parameters\" CLOB NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_filters\" CLOB NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_properties\" CLOB NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_client_sync_timestamp\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_server_sync_timestamp\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync_timestamp\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync_duration\" NUMBER NULL,");
-            stringBuilder.AppendLine($"  \"sync_scope_last_sync\" TIMESTAMP NULL,");
-            stringBuilder.AppendLine($"  CONSTRAINT \"PK_{this.clientTableName}\" PRIMARY KEY (\"sync_scope_id\", \"sync_scope_name\", \"sync_scope_client_id\")");
-            stringBuilder.AppendLine($")");
-
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = stringBuilder.ToString();
-            return command;
+            var commandText =
+$@"CREATE TABLE ""{this.clientTableName}"" (
+  ""sync_scope_id"" RAW(16) NOT NULL,
+  ""sync_scope_name"" VARCHAR2(100) NOT NULL,
+  ""sync_scope_hash"" VARCHAR2(100) NOT NULL,
+  ""sync_scope_parameters"" CLOB NULL,
+  ""scope_last_sync_timestamp"" NUMBER(19) NULL,
+  ""scope_last_server_sync_timestamp"" NUMBER(19) NULL,
+  ""scope_last_sync_duration"" NUMBER(19) NULL,
+  ""scope_last_sync"" TIMESTAMP NULL,
+  ""sync_scope_errors"" CLOB NULL,
+  ""sync_scope_properties"" CLOB NULL,
+  CONSTRAINT ""PK_{this.clientTableName}"" PRIMARY KEY (""sync_scope_id"", ""sync_scope_name"", ""sync_scope_hash"")
+)";
+            return CreateCommand(connection, transaction, commandText);
         }
 
-        /// <summary>
-        /// Gets a command to retrieve all scope info records.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetAllScopeInfosCommand(DbConnection connection, DbTransaction transaction)
+        /// <inheritdoc/>
+        public override DbCommand GetDropScopeInfoTableCommand(DbConnection connection, DbTransaction transaction)
+            => CreateCommand(connection, transaction, $"DROP TABLE \"{this.tableName}\"");
+
+        /// <inheritdoc/>
+        public override DbCommand GetDropScopeInfoClientTableCommand(DbConnection connection, DbTransaction transaction)
+            => CreateCommand(connection, transaction, $"DROP TABLE \"{this.clientTableName}\"");
+
+        // ----------------------------------------------------------------------------------------
+        // scope_info : exists / get / get all / insert / update / delete
+        // ----------------------------------------------------------------------------------------
+
+        /// <inheritdoc/>
+        public override DbCommand GetExistsScopeInfoCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
-                       ""sync_scope_last_server_sync_timestamp"", ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
-                FROM ""{this.tableName}""";
-
+            var command = CreateCommand(connection, transaction,
+                $"SELECT COUNT(*) FROM \"{this.tableName}\" WHERE \"sync_scope_name\" = :sync_scope_name");
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to retrieve all scope info client records.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetAllScopeInfoClientsCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", 
-                       ""sync_scope_parameters"", ""sync_scope_filters"", ""sync_scope_properties"", 
-                       ""sync_scope_last_client_sync_timestamp"", ""sync_scope_last_server_sync_timestamp"", 
-                       ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
-                FROM ""{this.clientTableName}""";
-
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to retrieve a specific scope info record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetScopeInfoCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_schema"", ""sync_scope_setup"", ""sync_scope_version"", 
-                       ""sync_scope_last_server_sync_timestamp"", ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
-                FROM ""{this.tableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
+            var command = CreateCommand(connection, transaction,
+                $"SELECT {ScopeInfoColumns} FROM \"{this.tableName}\" WHERE \"sync_scope_name\" = :sync_scope_name");
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to retrieve a specific scope info client record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
+        /// <inheritdoc/>
+        public override DbCommand GetAllScopeInfosCommand(DbConnection connection, DbTransaction transaction)
+            => CreateCommand(connection, transaction, $"SELECT {ScopeInfoColumns} FROM \"{this.tableName}\"");
+
+        /// <inheritdoc/>
+        public override DbCommand GetInsertScopeInfoCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                SELECT ""sync_scope_id"", ""sync_scope_name"", ""sync_scope_client_id"", ""sync_scope_client_name"", 
-                       ""sync_scope_parameters"", ""sync_scope_filters"", ""sync_scope_properties"", 
-                       ""sync_scope_last_client_sync_timestamp"", ""sync_scope_last_server_sync_timestamp"", 
-                       ""sync_scope_last_sync_timestamp"", ""sync_scope_last_sync_duration"", ""sync_scope_last_sync""
-                FROM ""{this.clientTableName}""
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId AND ""sync_scope_client_id"" = :clientId";
-
-            var scopeNameParam = command.CreateParameter();
-            scopeNameParam.ParameterName = ":scopeName";
-            scopeNameParam.DbType = DbType.String;
-            command.Parameters.Add(scopeNameParam);
-
-            var scopeIdParam = command.CreateParameter();
-            scopeIdParam.ParameterName = ":scopeId";
-            scopeIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(scopeIdParam);
-
-            var clientIdParam = command.CreateParameter();
-            clientIdParam.ParameterName = ":clientId";
-            clientIdParam.DbType = DbType.Guid;
-            command.Parameters.Add(clientIdParam);
-
+            var commandText =
+$@"DECLARE
+  rc SYS_REFCURSOR;
+BEGIN
+  INSERT INTO ""{this.tableName}""
+    ({ScopeInfoColumns})
+  VALUES
+    (:sync_scope_name, :sync_scope_schema, :sync_scope_setup, :sync_scope_version, :sync_scope_last_clean_timestamp, :sync_scope_properties);
+  OPEN rc FOR SELECT {ScopeInfoColumns} FROM ""{this.tableName}"" WHERE ""sync_scope_name"" = :sync_scope_name;
+  DBMS_SQL.RETURN_RESULT(rc);
+END;";
+            var command = CreateCommand(connection, transaction, commandText);
+            AddScopeInfoSaveParameters(command);
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to update a scope info record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
         public override DbCommand GetUpdateScopeInfoCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                UPDATE ""{this.tableName}"" SET
-                ""sync_scope_schema"" = :schema,
-                ""sync_scope_setup"" = :setup,
-                ""sync_scope_version"" = :version,
-                ""sync_scope_last_server_sync_timestamp"" = :lastServerSyncTimestamp,
-                ""sync_scope_last_sync_timestamp"" = :lastSyncTimestamp,
-                ""sync_scope_last_sync_duration"" = :lastSyncDuration,
-                ""sync_scope_last_sync"" = :lastSync
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId";
-
-            AddScopeInfoParameters(command);
-
+            var commandText =
+$@"DECLARE
+  rc SYS_REFCURSOR;
+BEGIN
+  UPDATE ""{this.tableName}"" SET
+    ""sync_scope_schema"" = :sync_scope_schema,
+    ""sync_scope_setup"" = :sync_scope_setup,
+    ""sync_scope_version"" = :sync_scope_version,
+    ""sync_scope_last_clean_timestamp"" = :sync_scope_last_clean_timestamp,
+    ""sync_scope_properties"" = :sync_scope_properties
+  WHERE ""sync_scope_name"" = :sync_scope_name;
+  OPEN rc FOR SELECT {ScopeInfoColumns} FROM ""{this.tableName}"" WHERE ""sync_scope_name"" = :sync_scope_name;
+  DBMS_SQL.RETURN_RESULT(rc);
+END;";
+            var command = CreateCommand(connection, transaction, commandText);
+            AddScopeInfoSaveParameters(command);
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to update a scope info client record.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
+        public override DbCommand GetDeleteScopeInfoCommand(DbConnection connection, DbTransaction transaction)
+        {
+            var command = CreateCommand(connection, transaction,
+                $"DELETE FROM \"{this.tableName}\" WHERE \"sync_scope_name\" = :sync_scope_name");
+            AddParameter(command, "sync_scope_name", DbType.String, size: 100);
+            return command;
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // scope_info_client : exists / get / get all / insert / update / delete
+        // ----------------------------------------------------------------------------------------
+
+        /// <inheritdoc/>
+        public override DbCommand GetExistsScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
+        {
+            var command = CreateCommand(connection, transaction,
+                $"SELECT COUNT(*) FROM \"{this.clientTableName}\" " +
+                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+            AddScopeInfoClientKeyParameters(command);
+            return command;
+        }
+
+        /// <inheritdoc/>
+        public override DbCommand GetScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
+        {
+            var command = CreateCommand(connection, transaction,
+                $"SELECT {ScopeInfoClientColumns} FROM \"{this.clientTableName}\" " +
+                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+            AddScopeInfoClientKeyParameters(command);
+            return command;
+        }
+
+        /// <inheritdoc/>
+        public override DbCommand GetAllScopeInfoClientsCommand(DbConnection connection, DbTransaction transaction)
+            => CreateCommand(connection, transaction, $"SELECT {ScopeInfoClientColumns} FROM \"{this.clientTableName}\"");
+
+        /// <inheritdoc/>
+        public override DbCommand GetInsertScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
+        {
+            var commandText =
+$@"DECLARE
+  rc SYS_REFCURSOR;
+BEGIN
+  INSERT INTO ""{this.clientTableName}""
+    ({ScopeInfoClientColumns})
+  VALUES
+    (:sync_scope_id, :sync_scope_name, :sync_scope_hash, :sync_scope_parameters, :scope_last_sync_timestamp, :scope_last_server_sync_timestamp, :scope_last_sync_duration, :scope_last_sync, :sync_scope_errors, :sync_scope_properties);
+  OPEN rc FOR SELECT {ScopeInfoClientColumns} FROM ""{this.clientTableName}""
+    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+  DBMS_SQL.RETURN_RESULT(rc);
+END;";
+            var command = CreateCommand(connection, transaction, commandText);
+            AddScopeInfoClientSaveParameters(command);
+            return command;
+        }
+
+        /// <inheritdoc/>
         public override DbCommand GetUpdateScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $@"
-                UPDATE ""{this.clientTableName}"" SET
-                ""sync_scope_client_name"" = :clientName,
-                ""sync_scope_parameters"" = :parameters,
-                ""sync_scope_filters"" = :filters,
-                ""sync_scope_properties"" = :properties,
-                ""sync_scope_last_client_sync_timestamp"" = :lastClientSyncTimestamp,
-                ""sync_scope_last_server_sync_timestamp"" = :lastServerSyncTimestamp,
-                ""sync_scope_last_sync_timestamp"" = :lastSyncTimestamp,
-                ""sync_scope_last_sync_duration"" = :lastSyncDuration,
-                ""sync_scope_last_sync"" = :lastSync
-                WHERE ""sync_scope_name"" = :scopeName AND ""sync_scope_id"" = :scopeId AND ""sync_scope_client_id"" = :clientId";
-
-            AddScopeInfoClientParameters(command);
-
+            var commandText =
+$@"DECLARE
+  rc SYS_REFCURSOR;
+BEGIN
+  UPDATE ""{this.clientTableName}"" SET
+    ""sync_scope_parameters"" = :sync_scope_parameters,
+    ""scope_last_sync_timestamp"" = :scope_last_sync_timestamp,
+    ""scope_last_server_sync_timestamp"" = :scope_last_server_sync_timestamp,
+    ""scope_last_sync_duration"" = :scope_last_sync_duration,
+    ""scope_last_sync"" = :scope_last_sync,
+    ""sync_scope_errors"" = :sync_scope_errors,
+    ""sync_scope_properties"" = :sync_scope_properties
+  WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+  OPEN rc FOR SELECT {ScopeInfoClientColumns} FROM ""{this.clientTableName}""
+    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+  DBMS_SQL.RETURN_RESULT(rc);
+END;";
+            var command = CreateCommand(connection, transaction, commandText);
+            AddScopeInfoClientSaveParameters(command);
             return command;
         }
 
-        /// <summary>
-        /// Gets a command to retrieve the local timestamp from the database.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
+        /// <inheritdoc/>
+        public override DbCommand GetDeleteScopeInfoClientCommand(DbConnection connection, DbTransaction transaction)
+        {
+            var command = CreateCommand(connection, transaction,
+                $"DELETE FROM \"{this.clientTableName}\" " +
+                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+            AddScopeInfoClientKeyParameters(command);
+            return command;
+        }
+
+        // ----------------------------------------------------------------------------------------
+        // Local timestamp
+        // ----------------------------------------------------------------------------------------
+
+        /// <inheritdoc/>
         public override DbCommand GetLocalTimestampCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $"SELECT {OracleObjectNames.TimestampValue} FROM DUAL";
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to drop the scope info table.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetDropScopeInfoTableCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $"DROP TABLE \"{this.tableName}\"";
-            return command;
-        }
-
-        /// <summary>
-        /// Gets a command to drop the scope info client table.
-        /// </summary>
-        /// <param name="connection">The database connection.</param>
-        /// <param name="transaction">Optional transaction to use.</param>
-        /// <returns>A DbCommand object ready to be executed.</returns>
-        public override DbCommand GetDropScopeInfoClientTableCommand(DbConnection connection, DbTransaction transaction)
-        {
-            var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            if (command is OracleCommand oracleCommand)
-                oracleCommand.BindByName = true;
-            command.CommandText = $"DROP TABLE \"{this.clientTableName}\"";
-            return command;
-        }
+            => CreateCommand(connection, transaction, $"SELECT {OracleObjectNames.TimestampValue} FROM DUAL");
     }
-} 
+}
