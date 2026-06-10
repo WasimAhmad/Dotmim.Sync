@@ -15,6 +15,12 @@ orchestrator cannot bind. Sync will fail at the very first step (scope handling)
 table command runs. That, plus a handful of targeted gaps below, is what separates this from
 a functional provider.
 
+> **Status update (fix pass, 2026-06-10):** every issue below (C1–C4, M1–M6, minors, I1–I6)
+> has been fixed on this branch — see `docs/plans/2026-06-10-oracle-provider-fixes.md` for
+> the execution amendments (ODP.NET DbType.Guid, CLOB DbType.Object, dual-API output rule)
+> and `docs/plans/oracle-provider-fixes-progress.md` for per-task commits. Live-database
+> validation (Task 16) is the remaining gate.
+
 ---
 
 ## 1. What is correct (verified against the framework)
