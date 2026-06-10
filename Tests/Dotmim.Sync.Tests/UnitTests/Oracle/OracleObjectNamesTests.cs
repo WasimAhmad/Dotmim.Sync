@@ -1,6 +1,8 @@
 using Dotmim.Sync.Builders;
 using Dotmim.Sync.Oracle.Builders;
 using System;
+using System.Data;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Dotmim.Sync.Tests.UnitTests.Oracle
@@ -98,6 +100,28 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             Assert.True(customJoinIndex >= 0, "custom join missing entirely");
             Assert.True(customJoinIndex < unionIndex, "custom join must be in the first branch");
             Assert.DoesNotContain("INNER JOIN \"ProductCategory\"", sql.Substring(unionIndex));
+        }
+
+        [Fact]
+        public void SelectChangesWithFilters_GroupsWheresWithTombstoneEscape_BeforeTimestampGuard()
+        {
+            var objectNames = BuildObjectNames();
+
+            var filter = new SyncFilter("Product");
+            filter.Parameters.Add(new SyncFilterParameter { Name = "ProductCategoryId", DbType = DbType.Guid });
+            filter.Wheres.Add(new SyncFilterWhereSideItem { TableName = "Product", ColumnName = "ProductCategoryId", ParameterName = "ProductCategoryId" });
+
+            var sql = objectNames.GetCommandText(DbCommandType.SelectChangesWithFilters, filter);
+
+            // the tombstone escape must be CLOSED by a paren before the timestamp guard's AND:
+            // ((wheres) OR tombstone) AND ts ... — without the close, AND binds tighter and
+            // the timestamp/scope guards are bypassed for every filtered row.
+            Assert.Matches(@"OR side\.""sync_row_is_tombstone"" = 1\s*\)", sql);
+
+            // and the timestamp guard must come after that closing paren
+            var tombstoneClose = Regex.Match(sql, @"OR side\.""sync_row_is_tombstone"" = 1\s*\)").Index;
+            var timestampGuard = sql.IndexOf("side.\"timestamp\" > :sync_min_timestamp", StringComparison.Ordinal);
+            Assert.True(tombstoneClose < timestampGuard, $"guard ordering wrong:\n{sql}");
         }
     }
 }

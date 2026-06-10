@@ -544,7 +544,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 return string.Empty;
 
             var sb = new StringBuilder();
-            sb.AppendLine("\t(");
+            sb.AppendLine("\t((");
             var and = "   ";
 
             foreach (var whereFilter in sideWhereFilters)
@@ -574,6 +574,7 @@ namespace Dotmim.Sync.Oracle.Builders
             sb.AppendLine();
             sb.AppendLine("\t)");
             sb.AppendLine("\tOR side.\"sync_row_is_tombstone\" = 1");
+            sb.AppendLine("\t)");
             return sb.ToString();
         }
 
