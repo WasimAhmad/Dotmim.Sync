@@ -79,12 +79,17 @@ namespace Dotmim.Sync.Oracle.Builders
 
             // Named binds everywhere; ODP.NET binds by position unless this is set.
             if (command is OracleCommand oracleCommand)
+            {
                 oracleCommand.BindByName = true;
+
+                // see OracleScopeCommand: promotes >4K string values to CLOB at execute time
+                return new OracleScopeCommand(oracleCommand);
+            }
 
             return command;
         }
 
-        private static void AddParameter(DbCommand command, string name, DbType dbType, bool isClob = false, int size = 0)
+        private static void AddParameter(DbCommand command, string name, DbType dbType, int size = 0)
         {
             var parameter = command.CreateParameter();
             parameter.ParameterName = $":{name}";
@@ -94,19 +99,18 @@ namespace Dotmim.Sync.Oracle.Builders
             if (size > 0)
                 parameter.Size = size;
 
-            // JSON payloads (schema/setup/parameters/errors/properties) can exceed the
-            // VARCHAR2 bind limit; bind them as CLOB.
-            if (isClob && parameter is OracleParameter oracleParameter)
-                oracleParameter.OracleDbType = OracleDbType.Clob;
-
+            // JSON payload parameters (schema/setup/parameters/errors/properties) are
+            // declared DbType.String so that the framework's DbType-based value conversion
+            // is a no-op. OracleScopeCommand promotes any string whose value exceeds 4000
+            // characters to OracleDbType.Clob at execute time (after values are assigned).
             command.Parameters.Add(parameter);
         }
 
         /// <summary>
         /// Converts a 36-char guid-string bind into RAW(16) with the exact byte layout of
         /// .NET's <see cref="Guid.ToByteArray"/> (fields 1-3 little-endian), so that values
-        /// written here equal values bound as <c>Guid.ToByteArray()</c> by the sync adapter
-        /// and read back identically by <c>OracleDataReader.GetGuid</c>.
+        /// written here match the byte layout the sync adapter binds for Guid values
+        /// (see OracleSyncAdapter) and what OracleDataReader.GetGuid reads back.
         /// ODP.NET rejects DbType.Guid on parameters, hence the string bind + SQL conversion.
         /// </summary>
         private static string GuidToRaw(string bindName)
@@ -119,11 +123,11 @@ namespace Dotmim.Sync.Oracle.Builders
         private static void AddScopeInfoSaveParameters(DbCommand command)
         {
             AddParameter(command, "sync_scope_name", DbType.String, size: 100);
-            AddParameter(command, "sync_scope_schema", DbType.String, isClob: true);
-            AddParameter(command, "sync_scope_setup", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_schema", DbType.String);
+            AddParameter(command, "sync_scope_setup", DbType.String);
             AddParameter(command, "sync_scope_version", DbType.String, size: 10);
             AddParameter(command, "sync_scope_last_clean_timestamp", DbType.Int64);
-            AddParameter(command, "sync_scope_properties", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_properties", DbType.String);
         }
 
         private static void AddScopeInfoClientSaveParameters(DbCommand command)
@@ -131,13 +135,13 @@ namespace Dotmim.Sync.Oracle.Builders
             AddParameter(command, "sync_scope_id", DbType.String, size: 36);
             AddParameter(command, "sync_scope_name", DbType.String, size: 100);
             AddParameter(command, "sync_scope_hash", DbType.String, size: 100);
-            AddParameter(command, "sync_scope_parameters", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_parameters", DbType.String);
             AddParameter(command, "scope_last_sync_timestamp", DbType.Int64);
             AddParameter(command, "scope_last_server_sync_timestamp", DbType.Int64);
             AddParameter(command, "scope_last_sync_duration", DbType.Int64);
             AddParameter(command, "scope_last_sync", DbType.DateTime);
-            AddParameter(command, "sync_scope_errors", DbType.String, isClob: true);
-            AddParameter(command, "sync_scope_properties", DbType.String, isClob: true);
+            AddParameter(command, "sync_scope_errors", DbType.String);
+            AddParameter(command, "sync_scope_properties", DbType.String);
         }
 
         private static void AddScopeInfoClientKeyParameters(DbCommand command)
@@ -159,6 +163,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var parameter = command.CreateParameter();
             parameter.ParameterName = ":tableName";
+            parameter.DbType = DbType.String;
             parameter.Value = unquotedTableName;
             command.Parameters.Add(parameter);
 

@@ -1,8 +1,11 @@
+using Dotmim.Sync;
 using Dotmim.Sync.Oracle.Builders;
 using Oracle.ManagedDataAccess.Client;
+using System;
 using System.Data;
 using System.Data.Common;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace Dotmim.Sync.Tests.UnitTests.Oracle
@@ -168,6 +171,87 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
                 var scopeIdParameter = command.Parameters.Cast<DbParameter>().Single(p => p.ParameterName == ":sync_scope_id");
                 Assert.Equal(DbType.String, scopeIdParameter.DbType);
             }
+        }
+
+        [Fact]
+        public void SaveCommands_ParameterDbTypes_SurviveFrameworkConversion()
+        {
+            // The orchestrator converts every non-null value with
+            // SyncTypeConverter.TryConvertFromDbType(value, parameter.DbType) before
+            // assignment (no provider hook). Every declared DbType must therefore be one
+            // the converter maps losslessly for the value shape the orchestrator passes.
+            using var connection = new OracleConnection();
+            var builder = new OracleScopeBuilder("scope_info");
+
+            var commands = new[]
+            {
+                builder.GetInsertScopeInfoCommand(connection, null),
+                builder.GetUpdateScopeInfoCommand(connection, null),
+                builder.GetInsertScopeInfoClientCommand(connection, null),
+                builder.GetUpdateScopeInfoClientCommand(connection, null),
+            };
+
+            foreach (var command in commands)
+            {
+                foreach (DbParameter parameter in command.Parameters)
+                {
+                    object representative = parameter.DbType switch
+                    {
+                        DbType.String => "{ \"name\": \"a json payload, not base64\" }",
+                        DbType.Int64 => 123456789L,
+                        DbType.DateTime => new DateTime(2026, 6, 10, 12, 0, 0, DateTimeKind.Utc),
+                        _ => null,
+                    };
+
+                    // a null here means the parameter reports a DbType outside the safe set
+                    // (e.g. Object from OracleDbType.Clob, Binary from Raw) — exactly the
+                    // regression this test guards against.
+                    Assert.True(representative is not null, $"{command.CommandText.Substring(0, 40)}... parameter {parameter.ParameterName} reports unsafe DbType {parameter.DbType}");
+
+                    var converted = SyncTypeConverter.TryConvertFromDbType(representative, parameter.DbType);
+                    Assert.Equal(representative, converted);
+                }
+            }
+        }
+
+        [Fact]
+        public void GuidToRaw_SqlSubstrPositions_ReproduceGuidToByteArray()
+        {
+            // Extract the SUBSTR positions from the actual generated SQL and simulate the
+            // expression in C#: the produced hex must equal Guid.ToByteArray(). A silent
+            // transposition here would corrupt every scope id without raising any error.
+            using var connection = new OracleConnection();
+            var builder = new OracleScopeBuilder("scope_info");
+            var text = builder.GetScopeInfoClientCommand(connection, null).CommandText;
+
+            var substrs = Regex.Matches(text, @"SUBSTR\(REPLACE\(:sync_scope_id, '-', ''\),(\d+),(\d+)\)");
+            Assert.Equal(9, substrs.Count);
+
+            var guid = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff");
+            var h = guid.ToString("N"); // 32 hex chars, no dashes — same as REPLACE(:guid,'-','')
+
+            var rawHex = string.Concat(substrs
+                .Cast<Match>()
+                .Select(m => h.Substring(int.Parse(m.Groups[1].Value) - 1, int.Parse(m.Groups[2].Value)))); // SQL SUBSTR is 1-based
+
+            var expectedHex = Convert.ToHexString(guid.ToByteArray());
+            Assert.Equal(expectedHex, rawHex, ignoreCase: true);
+        }
+
+        [Fact]
+        public void ScopeCommands_PromoteLargeStringValuesToClobAtExecuteTime()
+        {
+            using var inner = new OracleCommand();
+            var small = new OracleParameter { ParameterName = ":small", DbType = DbType.String, Value = "small json" };
+            var large = new OracleParameter { ParameterName = ":large", DbType = DbType.String, Value = new string('x', 50_000) };
+            inner.Parameters.Add(small);
+            inner.Parameters.Add(large);
+
+            OracleScopeCommand.PromoteLargeStringsToClob(inner.Parameters);
+
+            Assert.Equal(OracleDbType.Varchar2, small.OracleDbType);
+            Assert.Equal(OracleDbType.Clob, large.OracleDbType);
+            Assert.Equal(new string('x', 50_000), large.Value);
         }
     }
 }
