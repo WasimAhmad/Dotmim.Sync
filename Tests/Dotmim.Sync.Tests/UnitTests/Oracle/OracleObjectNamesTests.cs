@@ -125,6 +125,15 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         }
 
         [Fact]
+        public void TimestampValue_EvaluatesSystimestampExactlyOnce()
+        {
+            // seconds and fractional parts must come from ONE reading; two evaluations can
+            // straddle a second boundary and skew the clock by up to a second
+            var occurrences = Regex.Matches(OracleObjectNames.TimestampValue, "SYSTIMESTAMP").Count;
+            Assert.Equal(1, occurrences);
+        }
+
+        [Fact]
         public void EnableConstraints_UsesNovalidate()
         {
             var sql = BuildObjectNames().GetCommandText(DbCommandType.EnableConstraints);

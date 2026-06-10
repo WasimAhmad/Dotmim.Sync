@@ -26,13 +26,17 @@ namespace Dotmim.Sync.Oracle.Builders
         public const char RightQuoteChar = '"';
 
         /// <summary>
-        /// Monotonic, UTC, epoch-based version expression. Mirrors the MySQL provider's
-        /// <c>ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(6)) * 10000)</c> (~100µs resolution) so the
-        /// same clock is used by the triggers and by <c>GetLocalTimestamp</c>.
+        /// Monotonic, UTC, epoch-based version expression with ~100µs resolution (mirrors the
+        /// MySQL provider's <c>ROUND(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(6)) * 10000)</c>).
+        /// The same clock is used by the triggers, the apply-merge, UpdateUntrackedRows and
+        /// <c>GetLocalTimestamp</c>. A scalar subquery is used so SYSTIMESTAMP is evaluated
+        /// exactly once per reading (the seconds and fractional parts cannot straddle a
+        /// second boundary).
         /// </summary>
         public const string TimestampValue =
-            "ROUND(((CAST(SYS_EXTRACT_UTC(SYSTIMESTAMP) AS DATE) - DATE '1970-01-01') * 86400 " +
-            "+ TO_NUMBER(TO_CHAR(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'FF6')) / 1000000) * 10000)";
+            "(SELECT ROUND(((CAST(u AS DATE) - DATE '1970-01-01') * 86400 " +
+            "+ TO_NUMBER(TO_CHAR(u, 'FF6')) / 1000000) * 10000) " +
+            "FROM (SELECT SYS_EXTRACT_UTC(SYSTIMESTAMP) u FROM DUAL))";
 
         /// <summary>UTC "now" expression for the last_change_datetime tracking column.</summary>
         public const string NowValue = "SYS_EXTRACT_UTC(SYSTIMESTAMP)";
