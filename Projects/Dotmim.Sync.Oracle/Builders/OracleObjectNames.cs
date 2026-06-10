@@ -193,6 +193,10 @@ namespace Dotmim.Sync.Oracle.Builders
             stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
             stringBuilder.Append($"RIGHT JOIN {this.TrackingTableQuotedFullName} side ON ");
             stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+
+            if (filter != null)
+                stringBuilder.Append(this.CreateFilterCustomJoins(filter));
+
             stringBuilder.AppendLine("WHERE (");
 
             if (filter != null)
@@ -220,6 +224,10 @@ namespace Dotmim.Sync.Oracle.Builders
             stringBuilder.AppendLine($"FROM {this.TableQuotedFullName} base");
             stringBuilder.Append($"LEFT JOIN {this.TrackingTableQuotedFullName} side ON ");
             stringBuilder.AppendLine(this.PrimaryKeyJoin("base", "side"));
+
+            if (filter != null)
+                stringBuilder.Append(this.CreateFilterCustomJoins(filter));
+
             stringBuilder.AppendLine("WHERE (");
 
             if (filter != null)
@@ -588,6 +596,62 @@ namespace Dotmim.Sync.Oracle.Builders
             sb.AppendLine();
             sb.AppendLine("\t)");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Builds the custom JOIN clauses declared on the filter (ported from the MySQL
+        /// provider). The filter table itself is aliased as <c>base</c>; <see cref="Join.Outer"/>
+        /// maps to FULL OUTER JOIN (Oracle has no bare OUTER JOIN).
+        /// </summary>
+        public string CreateFilterCustomJoins(SyncFilter filter)
+        {
+            var customJoins = filter.Joins;
+
+            if (customJoins.Count == 0)
+                return string.Empty;
+
+            var stringBuilder = new StringBuilder();
+            stringBuilder.AppendLine();
+
+            foreach (var customJoin in customJoins)
+            {
+                switch (customJoin.JoinEnum)
+                {
+                    case Join.Left:
+                        stringBuilder.Append("LEFT JOIN ");
+                        break;
+                    case Join.Right:
+                        stringBuilder.Append("RIGHT JOIN ");
+                        break;
+                    case Join.Outer:
+                        stringBuilder.Append("FULL OUTER JOIN ");
+                        break;
+                    case Join.Inner:
+                    default:
+                        stringBuilder.Append("INNER JOIN ");
+                        break;
+                }
+
+                var filterTableParser = new TableParser(filter.TableName, LeftQuoteChar, RightQuoteChar);
+                var joinTableParser = new TableParser(customJoin.TableName, LeftQuoteChar, RightQuoteChar);
+
+                var leftTableParser = new TableParser(customJoin.LeftTableName, LeftQuoteChar, RightQuoteChar);
+                var leftTableName = leftTableParser.QuotedShortName;
+                if (string.Equals(filterTableParser.QuotedShortName, leftTableName, SyncGlobalization.DataSourceStringComparison))
+                    leftTableName = "base";
+
+                var rightTableParser = new TableParser(customJoin.RightTableName, LeftQuoteChar, RightQuoteChar);
+                var rightTableName = rightTableParser.QuotedShortName;
+                if (string.Equals(filterTableParser.QuotedShortName, rightTableName, SyncGlobalization.DataSourceStringComparison))
+                    rightTableName = "base";
+
+                var leftColumnParser = new ObjectParser(customJoin.LeftColumnName, LeftQuoteChar, RightQuoteChar);
+                var rightColumnParser = new ObjectParser(customJoin.RightColumnName, LeftQuoteChar, RightQuoteChar);
+
+                stringBuilder.AppendLine($"{joinTableParser.QuotedShortName} ON {leftTableName}.{leftColumnParser.QuotedShortName} = {rightTableName}.{rightColumnParser.QuotedShortName}");
+            }
+
+            return stringBuilder.ToString();
         }
     }
 }
