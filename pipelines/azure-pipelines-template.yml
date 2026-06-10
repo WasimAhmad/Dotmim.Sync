@@ -71,6 +71,12 @@ jobs:
         displayName: "Run PostgreSQL on Linux container"
         condition: eq('${{ parameters.docker }}', 'postgres')
 
+      - script: |
+          docker run --name oracle -e ORACLE_PASSWORD=Password12! -p 1521:1521 -d gvenzl/oracle-free:23-slim
+          timeout 600 bash -c 'until docker logs oracle 2>&1 | grep -q "DATABASE IS READY TO USE"; do sleep 5; done'
+        displayName: "Run Oracle Database Free on Linux container"
+        condition: eq('${{ parameters.docker }}', 'oracle')
+
       - script: dotnet restore
         displayName: 'Restore dependencies'
 

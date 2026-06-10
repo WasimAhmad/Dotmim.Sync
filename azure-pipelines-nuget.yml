@@ -78,6 +78,11 @@ jobs:
         displayName: "beta nuget Dotmim.Sync.MariaDB"
 
       - script: |
+          dotnet build Projects/Dotmim.Sync.Oracle/Dotmim.Sync.Oracle.csproj -c $(buildConfiguration) --version-suffix $(buildBetaId) --no-restore
+          dotnet pack Projects/Dotmim.Sync.Oracle/Dotmim.Sync.Oracle.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/Dotmim.Sync.Oracle --version-suffix $(buildBetaId)
+        displayName: "beta nuget Dotmim.Sync.Oracle"
+
+      - script: |
           dotnet build Projects/Dotmim.Sync.Sqlite/Dotmim.Sync.Sqlite.csproj -c $(buildConfiguration) --version-suffix $(buildBetaId) --no-restore
           dotnet pack Projects/Dotmim.Sync.Sqlite/Dotmim.Sync.Sqlite.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/Dotmim.Sync.Sqlite --version-suffix $(buildBetaId)
         displayName: "beta nuget Dotmim.Sync.Sqlite"
@@ -174,6 +179,11 @@ jobs:
           dotnet build Projects/Dotmim.Sync.MariaDB/Dotmim.Sync.MariaDB.csproj -c $(buildConfiguration) --no-restore
           dotnet pack Projects/Dotmim.Sync.MariaDB/Dotmim.Sync.MariaDB.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/Dotmim.Sync.MariaDB --no-build
         displayName: "release nuget Dotmim.Sync.MariaDB"
+
+      - script: |
+          dotnet build Projects/Dotmim.Sync.Oracle/Dotmim.Sync.Oracle.csproj -c $(buildConfiguration) --no-restore
+          dotnet pack Projects/Dotmim.Sync.Oracle/Dotmim.Sync.Oracle.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/Dotmim.Sync.Oracle --no-build
+        displayName: "release nuget Dotmim.Sync.Oracle"
 
       - script: |
           dotnet build Projects/Dotmim.Sync.Sqlite/Dotmim.Sync.Sqlite.csproj -c $(buildConfiguration) --no-restore

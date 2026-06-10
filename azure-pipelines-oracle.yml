@@ -1,0 +1,29 @@
+jobs:
+
+  - template: azure-pipelines-template.yml
+    parameters:
+      displayName: "Oracle Tcp .net 8.0"
+      dotnetfx: "net8.0"
+      filter: "Dotmim.Sync.Tests.OracleTcpTests"
+      docker: "oracle"
+
+  - template: azure-pipelines-template.yml
+    parameters:
+      displayName: "Oracle Conflicts .net 8.0"
+      dotnetfx: "net8.0"
+      filter: "Dotmim.Sync.Tests.OracleConflictTests"
+      docker: "oracle"
+
+  - template: azure-pipelines-template.yml
+    parameters:
+      displayName: "Oracle TCP Filter Tests .net 8.0"
+      dotnetfx: "net8.0"
+      filter: "Dotmim.Sync.Tests.OracleTcpFilterTests"
+      docker: "oracle"
+
+  - template: azure-pipelines-template.yml
+    parameters:
+      displayName: "Oracle Http Tests .net 8.0"
+      dotnetfx: "net8.0"
+      filter: "Dotmim.Sync.Tests.OracleHttpTests"
+      docker: "oracle"
