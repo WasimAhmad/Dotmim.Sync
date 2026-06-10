@@ -1,5 +1,6 @@
 using Dotmim.Sync.Oracle.Builders;
 using Oracle.ManagedDataAccess.Client;
+using System.Data;
 using System.Data.Common;
 using System.Linq;
 using Xunit;
@@ -94,6 +95,13 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             Assert.Contains(":sync_scope_errors", names);
             Assert.Contains(":sync_scope_properties", names);
             Assert.Contains("DBMS_SQL.RETURN_RESULT", command.CommandText);
+
+            // ODP.NET rejects DbType.Guid: scope ids bind as 36-char strings and the SQL
+            // converts them to RAW(16) in Guid.ToByteArray() order.
+            var scopeIdParameter = command.Parameters.Cast<DbParameter>().Single(p => p.ParameterName == ":sync_scope_id");
+            Assert.Equal(DbType.String, scopeIdParameter.DbType);
+            Assert.Equal(36, scopeIdParameter.Size);
+            Assert.Contains("HEXTORAW", command.CommandText);
         }
 
         [Fact]
@@ -133,6 +141,33 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             Assert.Contains(":sync_scope_name", text);
             Assert.Contains(":sync_scope_id", text);
             Assert.Contains(":sync_scope_hash", text);
+        }
+
+        [Fact]
+        public void ScopeInfoClientCommands_ConvertScopeIdStringToRaw()
+        {
+            using var connection = new OracleConnection();
+            var builder = new OracleScopeBuilder("scope_info");
+
+            var commands = new[]
+            {
+                builder.GetExistsScopeInfoClientCommand(connection, null),
+                builder.GetScopeInfoClientCommand(connection, null),
+                builder.GetInsertScopeInfoClientCommand(connection, null),
+                builder.GetUpdateScopeInfoClientCommand(connection, null),
+                builder.GetDeleteScopeInfoClientCommand(connection, null),
+            };
+
+            foreach (var command in commands)
+            {
+                // every scope-id usage must go through the HEXTORAW conversion;
+                // a bare RAW-vs-string comparison would never match.
+                Assert.Contains("HEXTORAW", command.CommandText);
+                Assert.DoesNotContain("= :sync_scope_id", command.CommandText);
+
+                var scopeIdParameter = command.Parameters.Cast<DbParameter>().Single(p => p.ParameterName == ":sync_scope_id");
+                Assert.Equal(DbType.String, scopeIdParameter.DbType);
+            }
         }
     }
 }

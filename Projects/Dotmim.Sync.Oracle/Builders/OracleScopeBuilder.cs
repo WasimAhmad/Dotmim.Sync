@@ -89,26 +89,31 @@ namespace Dotmim.Sync.Oracle.Builders
             var parameter = command.CreateParameter();
             parameter.ParameterName = $":{name}";
 
-            // ODP.NET rejects DbType.Guid; map it to OracleDbType.Raw (16 bytes = RAW(16)).
-            if (dbType == DbType.Guid && parameter is OracleParameter guidParam)
-            {
-                guidParam.OracleDbType = OracleDbType.Raw;
-                guidParam.Size = 16;
-            }
-            else
-            {
-                parameter.DbType = dbType;
+            parameter.DbType = dbType;
 
-                if (size > 0)
-                    parameter.Size = size;
+            if (size > 0)
+                parameter.Size = size;
 
-                // JSON payloads (schema/setup/parameters/errors/properties) can exceed the
-                // VARCHAR2 bind limit; bind them as CLOB.
-                if (isClob && parameter is OracleParameter oracleParameter)
-                    oracleParameter.OracleDbType = OracleDbType.Clob;
-            }
+            // JSON payloads (schema/setup/parameters/errors/properties) can exceed the
+            // VARCHAR2 bind limit; bind them as CLOB.
+            if (isClob && parameter is OracleParameter oracleParameter)
+                oracleParameter.OracleDbType = OracleDbType.Clob;
 
             command.Parameters.Add(parameter);
+        }
+
+        /// <summary>
+        /// Converts a 36-char guid-string bind into RAW(16) with the exact byte layout of
+        /// .NET's <see cref="Guid.ToByteArray"/> (fields 1-3 little-endian), so that values
+        /// written here equal values bound as <c>Guid.ToByteArray()</c> by the sync adapter
+        /// and read back identically by <c>OracleDataReader.GetGuid</c>.
+        /// ODP.NET rejects DbType.Guid on parameters, hence the string bind + SQL conversion.
+        /// </summary>
+        private static string GuidToRaw(string bindName)
+        {
+            var h = $"REPLACE({bindName}, '-', '')";
+            return $"HEXTORAW(SUBSTR({h},7,2)||SUBSTR({h},5,2)||SUBSTR({h},3,2)||SUBSTR({h},1,2)" +
+                   $"||SUBSTR({h},11,2)||SUBSTR({h},9,2)||SUBSTR({h},15,2)||SUBSTR({h},13,2)||SUBSTR({h},17,16))";
         }
 
         private static void AddScopeInfoSaveParameters(DbCommand command)
@@ -123,7 +128,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
         private static void AddScopeInfoClientSaveParameters(DbCommand command)
         {
-            AddParameter(command, "sync_scope_id", DbType.Guid);
+            AddParameter(command, "sync_scope_id", DbType.String, size: 36);
             AddParameter(command, "sync_scope_name", DbType.String, size: 100);
             AddParameter(command, "sync_scope_hash", DbType.String, size: 100);
             AddParameter(command, "sync_scope_parameters", DbType.String, isClob: true);
@@ -138,7 +143,7 @@ namespace Dotmim.Sync.Oracle.Builders
         private static void AddScopeInfoClientKeyParameters(DbCommand command)
         {
             AddParameter(command, "sync_scope_name", DbType.String, size: 100);
-            AddParameter(command, "sync_scope_id", DbType.Guid);
+            AddParameter(command, "sync_scope_id", DbType.String, size: 36);
             AddParameter(command, "sync_scope_hash", DbType.String, size: 100);
         }
 
@@ -297,7 +302,7 @@ END;";
         {
             var command = CreateCommand(connection, transaction,
                 $"SELECT COUNT(*) FROM \"{this.clientTableName}\" " +
-                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+                $"WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = {GuidToRaw(":sync_scope_id")} AND \"sync_scope_hash\" = :sync_scope_hash");
             AddScopeInfoClientKeyParameters(command);
             return command;
         }
@@ -307,7 +312,7 @@ END;";
         {
             var command = CreateCommand(connection, transaction,
                 $"SELECT {ScopeInfoClientColumns} FROM \"{this.clientTableName}\" " +
-                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+                $"WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = {GuidToRaw(":sync_scope_id")} AND \"sync_scope_hash\" = :sync_scope_hash");
             AddScopeInfoClientKeyParameters(command);
             return command;
         }
@@ -326,9 +331,9 @@ BEGIN
   INSERT INTO ""{this.clientTableName}""
     ({ScopeInfoClientColumns})
   VALUES
-    (:sync_scope_id, :sync_scope_name, :sync_scope_hash, :sync_scope_parameters, :scope_last_sync_timestamp, :scope_last_server_sync_timestamp, :scope_last_sync_duration, :scope_last_sync, :sync_scope_errors, :sync_scope_properties);
+    ({GuidToRaw(":sync_scope_id")}, :sync_scope_name, :sync_scope_hash, :sync_scope_parameters, :scope_last_sync_timestamp, :scope_last_server_sync_timestamp, :scope_last_sync_duration, :scope_last_sync, :sync_scope_errors, :sync_scope_properties);
   OPEN rc FOR SELECT {ScopeInfoClientColumns} FROM ""{this.clientTableName}""
-    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = {GuidToRaw(":sync_scope_id")} AND ""sync_scope_hash"" = :sync_scope_hash;
   DBMS_SQL.RETURN_RESULT(rc);
 END;";
             var command = CreateCommand(connection, transaction, commandText);
@@ -351,9 +356,9 @@ BEGIN
     ""scope_last_sync"" = :scope_last_sync,
     ""sync_scope_errors"" = :sync_scope_errors,
     ""sync_scope_properties"" = :sync_scope_properties
-  WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+  WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = {GuidToRaw(":sync_scope_id")} AND ""sync_scope_hash"" = :sync_scope_hash;
   OPEN rc FOR SELECT {ScopeInfoClientColumns} FROM ""{this.clientTableName}""
-    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = :sync_scope_id AND ""sync_scope_hash"" = :sync_scope_hash;
+    WHERE ""sync_scope_name"" = :sync_scope_name AND ""sync_scope_id"" = {GuidToRaw(":sync_scope_id")} AND ""sync_scope_hash"" = :sync_scope_hash;
   DBMS_SQL.RETURN_RESULT(rc);
 END;";
             var command = CreateCommand(connection, transaction, commandText);
@@ -366,7 +371,7 @@ END;";
         {
             var command = CreateCommand(connection, transaction,
                 $"DELETE FROM \"{this.clientTableName}\" " +
-                "WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = :sync_scope_id AND \"sync_scope_hash\" = :sync_scope_hash");
+                $"WHERE \"sync_scope_name\" = :sync_scope_name AND \"sync_scope_id\" = {GuidToRaw(":sync_scope_id")} AND \"sync_scope_hash\" = :sync_scope_hash");
             AddScopeInfoClientKeyParameters(command);
             return command;
         }
