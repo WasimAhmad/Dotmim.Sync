@@ -73,6 +73,11 @@ namespace Dotmim.Sync.Oracle.Builders
             this.TrackingTableName = EnsureIdentifierLength(trackingTableParser.TableName);
             this.TrackingTableQuotedShortName = trackingTableParser.QuotedShortName;
             this.TrackingTableQuotedFullName = trackingTableParser.QuotedFullName;
+
+            // derived names add up to 7 bytes (_ts_idx) / 3 bytes (PK_) — validate them
+            // eagerly so a too-long name fails at construction, not mid-provisioning
+            EnsureIdentifierLength($"PK_{this.TrackingTableName}");
+            EnsureIdentifierLength($"{this.TrackingTableName}_ts_idx");
         }
 
         /// <summary>Gets the left quote string.</summary>
@@ -159,9 +164,9 @@ namespace Dotmim.Sync.Oracle.Builders
         private static string Quoted(string columnName) => $"\"{columnName}\"";
 
         /// <summary>
-        /// Oracle 12.2+ limits identifiers to 128 bytes. Generated names (tracking table,
-        /// triggers, index, constraints) must fit; fail fast with a clear message instead
-        /// of an opaque ORA-00972.
+        /// Oracle 12.2+ (with DB COMPATIBLE &gt;= 12.2.0.0) limits identifiers to 128 bytes.
+        /// Generated names (tracking table, triggers, index, constraints) must fit;
+        /// fail fast with a clear message instead of an opaque ORA-00972.
         /// </summary>
         internal static string EnsureIdentifierLength(string identifier)
         {

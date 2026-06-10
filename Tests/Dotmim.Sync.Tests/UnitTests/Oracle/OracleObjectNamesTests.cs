@@ -174,6 +174,7 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             // two DDL statements wrapped in one PL/SQL block (Oracle cannot batch DDL)
             Assert.Contains("EXECUTE IMMEDIATE 'CREATE TABLE", script);
             Assert.Contains("EXECUTE IMMEDIATE 'CREATE INDEX", script);
+            Assert.Contains("CREATE INDEX \"", script); // index name must be double-quoted
             Assert.Contains("(\"timestamp\")", script);
             Assert.StartsWith("BEGIN", script.TrimStart());
         }
@@ -181,15 +182,17 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         [Fact]
         public void GetTriggerCommandName_ThrowsWhenIdentifierExceeds128Bytes()
         {
-            var longName = new string('X', 115); // + "_insert_trigger" => 130 chars > 128; + "_tracking" => 124 (ok)
-            var table = new SyncTable(longName);
+            var table = new SyncTable("Product");
             table.Columns.Add(new SyncColumn("Id", typeof(int)));
             table.PrimaryKeys.Add("Id");
 
             var schema = new SyncSet();
             schema.Tables.Add(table);
 
-            var scopeInfo = new ScopeInfo { Name = "DefaultScope", Setup = new SyncSetup(longName) };
+            // tracking name ("Product_tracking") is fine; the trigger name
+            // "Product" + 120 chars + "_insert_trigger" = 142 bytes > 128
+            var setup = new SyncSetup("Product") { TriggersSuffix = new string('X', 120) };
+            var scopeInfo = new ScopeInfo { Name = "DefaultScope", Setup = setup };
             var objectNames = new OracleObjectNames(table, scopeInfo);
 
             Assert.Throws<ArgumentException>(() => objectNames.GetTriggerCommandName(DbTriggerType.Insert));
