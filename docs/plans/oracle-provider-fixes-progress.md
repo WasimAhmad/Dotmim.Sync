@@ -35,7 +35,7 @@ Update this file as each task lands: set status, add the commit hash, note any d
 | Test class | Result | Notes |
 |---|---|---|
 | OracleTcpTests | **101/101** | 87 on first full run; 14 fixed and re-verified 15/15 |
-| OracleConflictTests | **54/56** | 2 residuals are a Core/Windows file-lock (`InternalApplyCleanErrorsAsync` deletes an open errors-batch file — passes on Linux CI; spawned follow-up task `task_dec99e82`) |
+| OracleConflictTests | **56/56** | 54/56 on first pass; the 2 residuals were a Core/Windows file-lock, fixed in `b3c8dc63` (resolves follow-up task `task_dec99e82`): `InternalApplyCleanErrorsAsync` re-opens the errors-batch file to rewrite remaining failed rows, then called `File.Delete` on it while the writer still held it open — IOException on Windows; on Linux the unlink silently succeeds (and the rewritten JSON vanishes with the handle), which is why CI never sees it. Provider-independent Core bug — any Windows client using `ErrorResolution.RetryOnNextSync` hits it. Fix: `CloseFileAsync()` the writer before the delete (also writes the JSON footer per table iteration instead of only for the last table). Both `ErrorUniqueKeyOnSameTableRetryOnNextSyncThenResolveClientByDelete/ByUpdate` re-verified live (red 2/2 IOException → green 2/2) |
 | OracleTcpFilterTests | **28/28** | full filter surface (joins, precedence, Guid binds) |
 | OracleHttpTests | **87/87** | HTTP transport + JSON round-trips incl. 20KB BLOBs |
 | Oracle unit suite | **67/67** | grew from 47 with live-fix regression tests |
