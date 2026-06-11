@@ -27,6 +27,7 @@ using Dotmim.Sync.Tests.Fixtures;
 using Dotmim.Sync.Tests.Models;
 using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace Dotmim.Sync.Tests.Misc
