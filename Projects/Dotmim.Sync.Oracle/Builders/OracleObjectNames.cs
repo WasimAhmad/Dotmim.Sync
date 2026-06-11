@@ -259,7 +259,10 @@ namespace Dotmim.Sync.Oracle.Builders
             stringBuilder.AppendLine(")");
 
             // Union the recent tombstones so deletions are part of the snapshot.
-            stringBuilder.AppendLine("UNION");
+            // UNION ALL: UNION's implicit DISTINCT cannot compare LOB columns in Oracle
+            // (ORA-22848), and the branches are disjoint by construction — a tombstoned
+            // tracking row has no base row, so it can only come from the second branch.
+            stringBuilder.AppendLine("UNION ALL");
             stringBuilder.AppendLine("SELECT ");
             comma = "  ";
             foreach (var column in this.tableDescription.GetMutableColumns(false, true))

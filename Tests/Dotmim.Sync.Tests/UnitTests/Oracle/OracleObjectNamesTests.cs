@@ -199,6 +199,15 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         }
 
         [Fact]
+        public void SelectInitializedChanges_UsesUnionAll_LobColumnsCannotBeDistinctKeys()
+        {
+            var sql = BuildObjectNames().GetCommandText(DbCommandType.SelectInitializedChanges);
+
+            // UNION's implicit DISTINCT raises ORA-22848 on tables with BLOB/CLOB columns
+            Assert.Contains("UNION ALL", sql);
+        }
+
+        [Fact]
         public void ConstraintCommands_EscapeApostrophesInTableNameLiteral()
         {
             var table = new SyncTable("O'Brien");
