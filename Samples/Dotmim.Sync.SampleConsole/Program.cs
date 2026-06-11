@@ -50,8 +50,12 @@ internal class Program
 
         // var serverProvider = new NpgsqlSyncProvider(DBHelper.GetNpgsqlDatabaseConnectionString("data"));
         // var serverProvider = new MariaDBSyncProvider(DBHelper.GetMariadbDatabaseConnectionString(ServerDbName));
-        // var serverProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_SERVER"));
-        var serverProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(ServerDbName));
+
+        // Oracle has no auto-create: the user/schema must exist before connecting (ORA-01017 otherwise).
+        // CreateOracleDatabaseAsync creates it via the OracleAdminConnection if missing.
+        await DBHelper.CreateOracleDatabaseAsync("DMS_SERVER");
+        var serverProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_SERVER"));
+        //var serverProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(ServerDbName));
 
         var clientProvider = new SqliteSyncProvider(Path.GetRandomFileName().Replace(".", "").ToLowerInvariant() + ".db");
         //var clientProvider = new SqlSyncProvider(DBHelper.GetDatabaseConnectionString(ClientDbName));
@@ -116,6 +120,9 @@ internal class Program
     private static async Task SynchronizeWithOracleAsync()
     {
         var serverProvider = new SqlSyncProvider(DBHelper.GetDatabaseConnectionString(ServerDbName));
+
+        // creates the Oracle user/schema via the OracleAdminConnection if it does not exist yet
+        await DBHelper.CreateOracleDatabaseAsync("DMS_CLIENT");
         var clientProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_CLIENT"));
 
         var setup = new SyncSetup(AllTables);

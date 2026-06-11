@@ -2,6 +2,7 @@
 using Dotmim.Sync.Tests.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
+using Oracle.ManagedDataAccess.Client;
 using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections.Generic;
@@ -55,6 +56,47 @@ namespace Dotmim.Sync.SampleConsole
         // In Oracle a "database" is a user/schema, so dbName maps to the Oracle user name
         public static string GetOracleDatabaseConnectionString(string dbName) =>
             string.Format(configuration.GetSection("ConnectionStrings")["OracleConnection"], dbName);
+
+        /// <summary>
+        /// In Oracle a "database" is a user/schema, and creating one is an admin operation
+        /// (the sync provider's EnsureDatabase is a no-op by design). Creates the user with
+        /// CONNECT/RESOURCE grants and unlimited quota, using the OracleAdminConnection
+        /// from appsettings.json. The password is the one used by the OracleConnection template.
+        /// </summary>
+        public static async Task CreateOracleDatabaseAsync(string dbName, bool recreateDb = false)
+        {
+            using var adminConnection = new OracleConnection(GetConnectionString("OracleAdminConnection"));
+            await adminConnection.OpenAsync();
+
+            if (recreateDb)
+            {
+                using var dropCommand = adminConnection.CreateCommand();
+                dropCommand.CommandText = $"DROP USER {dbName} CASCADE";
+                try { await dropCommand.ExecuteNonQueryAsync(); } catch (OracleException) { /* user may not exist */ }
+            }
+
+            using var existsCommand = adminConnection.CreateCommand();
+            existsCommand.CommandText = "SELECT COUNT(*) FROM ALL_USERS WHERE USERNAME = UPPER(:userName)";
+            var userNameParameter = existsCommand.CreateParameter();
+            userNameParameter.ParameterName = ":userName";
+            userNameParameter.Value = dbName;
+            existsCommand.Parameters.Add(userNameParameter);
+
+            if (Convert.ToInt32(await existsCommand.ExecuteScalarAsync()) > 0)
+                return;
+
+            foreach (var commandText in new[]
+            {
+                $"CREATE USER {dbName} IDENTIFIED BY \"Password12!\"",
+                $"GRANT CONNECT, RESOURCE TO {dbName}",
+                $"ALTER USER {dbName} QUOTA UNLIMITED ON USERS",
+            })
+            {
+                using var command = adminConnection.CreateCommand();
+                command.CommandText = commandText;
+                await command.ExecuteNonQueryAsync();
+            }
+        }
 
 
 
