@@ -104,9 +104,11 @@ namespace Dotmim.Sync.Oracle.Builders
                 // Columns
                 var columnsCommand = connection.CreateCommand();
                 columnsCommand.Transaction = transaction;
+                // USER_TAB_COLS (not USER_TAB_COLUMNS) exposes VIRTUAL_COLUMN; virtual (computed)
+                // columns must be flagged so they are excluded from sync DML on every side.
                 columnsCommand.CommandText = @"
-                    SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, CHAR_LENGTH
-                    FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :tableName ORDER BY COLUMN_ID";
+                    SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, CHAR_LENGTH, VIRTUAL_COLUMN
+                    FROM USER_TAB_COLS WHERE TABLE_NAME = :tableName AND HIDDEN_COLUMN = 'NO' ORDER BY COLUMN_ID";
                 var p = columnsCommand.CreateParameter();
                 p.ParameterName = ":tableName";
                 p.Value = parsedName;
@@ -121,6 +123,7 @@ namespace Dotmim.Sync.Oracle.Builders
                         var precision = await reader.IsDBNullAsync(3).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(3));
                         var scale = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
                         var charLength = await reader.IsDBNullAsync(6).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(6));
+                        var isVirtual = !await reader.IsDBNullAsync(7).ConfigureAwait(false) && reader.GetString(7) == "YES";
                         var column = new SyncColumn(reader.GetString(0))
                         {
                             OriginalTypeName = dataType,
@@ -128,6 +131,7 @@ namespace Dotmim.Sync.Oracle.Builders
                             MaxLength = dataType.Contains("CHAR", StringComparison.OrdinalIgnoreCase) ? charLength : dataLength,
                             Precision = precision,
                             Scale = scale,
+                            IsCompute = isVirtual,
                         };
                         column.SetType(OracleTableBuilder.GetManagedType(dataType, precision, scale, dataLength));
                         syncTable.Columns.Add(column);

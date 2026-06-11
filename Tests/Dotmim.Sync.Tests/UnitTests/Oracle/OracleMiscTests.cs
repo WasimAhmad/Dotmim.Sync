@@ -56,5 +56,17 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
 
             Assert.Equal(expected, Dotmim.Sync.Oracle.Builders.OracleTableBuilder.GetOracleColumnTypeString(column));
         }
+
+        [Fact]
+        public void IsReadonly_TreatsComputeColumnsAsReadonly()
+        {
+            // Virtual (computed) columns must be excluded from sync DML on every side,
+            // like the SQL Server and MySQL metadata managers do.
+            var metadata = new Dotmim.Sync.Oracle.Manager.OracleDbMetadata();
+
+            Assert.True(metadata.IsReadonly(new SyncColumn("Total", typeof(decimal)) { IsCompute = true }));
+            Assert.True(metadata.IsReadonly(new SyncColumn("Ts", typeof(decimal)) { IsReadOnly = true }));
+            Assert.False(metadata.IsReadonly(new SyncColumn("Amount", typeof(decimal))));
+        }
     }
 }

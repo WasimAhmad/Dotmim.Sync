@@ -789,6 +789,11 @@ namespace Dotmim.Sync.Tests.Models
                 {
                     entity.Property(d => d.Total).HasComputedColumnSql("(Amount - Discount)", stored: true);
                 }
+                else if (this.ProviderType == ProviderType.Oracle)
+                {
+                    // Oracle only supports VIRTUAL generated columns (no stored option)
+                    entity.Property(d => d.Total).HasComputedColumnSql(@"""Amount"" - ""Discount""");
+                }
 #endif
 
                 entity.Property(d => d.ProductId)

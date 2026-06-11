@@ -129,7 +129,7 @@ namespace Dotmim.Sync.Oracle.Manager
         public override DbType GetDbType(SyncColumn columnDefinition) => columnDefinition.GetDbType();
 
         /// <inheritdoc/>
-        public override bool IsReadonly(SyncColumn columnDefinition) => columnDefinition.IsReadOnly;
+        public override bool IsReadonly(SyncColumn columnDefinition) => columnDefinition.IsReadOnly || columnDefinition.IsCompute;
 
         /// <inheritdoc/>
         public override bool IsNumericType(SyncColumn columnDefinition)

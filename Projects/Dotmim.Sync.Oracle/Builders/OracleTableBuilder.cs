@@ -276,10 +276,12 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var command = connection.CreateCommand();
             command.Transaction = transaction;
+            // USER_TAB_COLS (not USER_TAB_COLUMNS) exposes VIRTUAL_COLUMN; virtual (computed)
+            // columns must be flagged so they are excluded from sync DML on every side.
             command.CommandText = @"
-                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, CHAR_LENGTH
-                FROM USER_TAB_COLUMNS
-                WHERE TABLE_NAME = :tableName
+                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, CHAR_LENGTH, VIRTUAL_COLUMN
+                FROM USER_TAB_COLS
+                WHERE TABLE_NAME = :tableName AND HIDDEN_COLUMN = 'NO'
                 ORDER BY COLUMN_ID";
 
             var parameter = command.CreateParameter();
@@ -303,6 +305,7 @@ namespace Dotmim.Sync.Oracle.Builders
                     var scale = await reader.IsDBNullAsync(4).ConfigureAwait(false) ? (byte)0 : Convert.ToByte(reader.GetValue(4));
                     var allowNull = reader.GetString(5) == "Y";
                     var charLength = await reader.IsDBNullAsync(6).ConfigureAwait(false) ? 0 : Convert.ToInt32(reader.GetValue(6));
+                    var isVirtual = !await reader.IsDBNullAsync(7).ConfigureAwait(false) && reader.GetString(7) == "YES";
 
                     var column = new SyncColumn(columnName)
                     {
@@ -312,6 +315,7 @@ namespace Dotmim.Sync.Oracle.Builders
                         Precision = precision,
                         Scale = scale,
                         IsAutoIncrement = false,
+                        IsCompute = isVirtual,
                     };
 
                     column.SetType(GetManagedType(dataType, precision, scale, dataLength));
