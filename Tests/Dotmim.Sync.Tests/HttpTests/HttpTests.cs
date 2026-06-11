@@ -296,7 +296,12 @@ namespace Dotmim.Sync.Tests.IntegrationTests
             var (serverProviderType, _) = HelperDatabase.GetDatabaseType(serverProvider);
 
             var badServerProvider = HelperDatabase.GetSyncProvider(serverProviderType, HelperDatabase.GetRandomName("tcp_srv_bad_"));
-            badServerProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
+
+            // Oracle's connection string builder rejects SQL Server style keywords at assignment time;
+            // the random database name above already yields a valid but unreachable connection string
+            // (the user/schema does not exist), which is what this test needs
+            if (serverProviderType != ProviderType.Oracle)
+                badServerProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
 
             // Create a client provider, but it will not be used since server provider will raise an error before
             var clientProvider = clientsProvider.First();
@@ -322,7 +327,11 @@ namespace Dotmim.Sync.Tests.IntegrationTests
 
                 if (clientProviderType == ProviderType.Sqlite)
                     badClientProvider.ConnectionString = $@"Data Source=/dev/null/foo;";
-                else
+
+                // Oracle's connection string builder rejects SQL Server style keywords at assignment time;
+                // the random database name above already yields a valid but unreachable connection string
+                // (the user/schema does not exist), which is what this test needs
+                else if (clientProviderType != ProviderType.Oracle)
                     badClientProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
 
                 badClientsProviders.Add(badClientProvider);
@@ -1678,8 +1687,11 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 await clientProvider.AddProductCategoryAsync();
 
                 // Generate an outdated situation
-                await HelperDatabase.ExecuteScriptAsync(clientProviderType, clientDatabaseName,
-                                    $"Update scope_info_client set scope_last_server_sync_timestamp=-1");
+                // Oracle stores the DMS scope tables as quoted lower-case identifiers, so the raw script must quote them
+                var outdatedScript = clientProviderType == ProviderType.Oracle
+                    ? "Update \"scope_info_client\" set \"scope_last_server_sync_timestamp\"=-1"
+                    : "Update scope_info_client set scope_last_server_sync_timestamp=-1";
+                await HelperDatabase.ExecuteScriptAsync(clientProviderType, clientDatabaseName, outdatedScript);
 
                 var agent = new SyncAgent(clientProvider, new WebRemoteOrchestrator(serviceUri), options);
 

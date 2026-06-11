@@ -314,7 +314,12 @@ namespace Dotmim.Sync.Tests.IntegrationTests
             var (serverProviderType, _) = HelperDatabase.GetDatabaseType(serverProvider);
 
             var badServerProvider = HelperDatabase.GetSyncProvider(serverProviderType, HelperDatabase.GetRandomName("tcp_srv_bad_"));
-            badServerProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
+
+            // Oracle's connection string builder rejects SQL Server style keywords at assignment time;
+            // the random database name above already yields a valid but unreachable connection string
+            // (the user/schema does not exist), which is what this test needs
+            if (serverProviderType != ProviderType.Oracle)
+                badServerProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
 
             // Create a client provider, but it will not be used since server provider will raise an error before
             var clientProvider = clientsProvider.First();
@@ -337,7 +342,11 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 var badClientProvider = HelperDatabase.GetSyncProvider(clientProviderType, HelperDatabase.GetRandomName("tcp_bad_cli"));
                 if (clientProviderType == ProviderType.Sqlite)
                     badClientProvider.ConnectionString = $@"Data Source=/dev/null/foo;";
-                else
+
+                // Oracle's connection string builder rejects SQL Server style keywords at assignment time;
+                // the random database name above already yields a valid but unreachable connection string
+                // (the user/schema does not exist), which is what this test needs
+                else if (clientProviderType != ProviderType.Oracle)
                     badClientProvider.ConnectionString = $@"Server=unknown;Database=unknown;UID=sa;PWD=unknown";
 
                 badClientsProviders.Add(badClientProvider);
@@ -359,7 +368,11 @@ namespace Dotmim.Sync.Tests.IntegrationTests
         public async Task BadTableWithoutPrimaryKeysShouldRaiseError()
         {
             // Create the table on the server
-            await serverProvider.ExecuteSqlRawAsync("create table tabletest (testid int, testname varchar(50))");
+            // Oracle folds unquoted identifiers to upper case, so quote them to match the lower case setup table name
+            var createTableTestCommand = ServerProviderType == ProviderType.Oracle
+                ? "create table \"tabletest\" (\"testid\" number(10), \"testname\" varchar2(50))"
+                : "create table tabletest (testid int, testname varchar(50))";
+            await serverProvider.ExecuteSqlRawAsync(createTableTestCommand);
 
             // Execute a sync on all clients and check results
             foreach (var clientProvider in clientsProvider)
@@ -377,7 +390,10 @@ namespace Dotmim.Sync.Tests.IntegrationTests
             }
 
             // Create the table on the server
-            await serverProvider.ExecuteSqlRawAsync("drop table tabletest");
+            var dropTableTestCommand = ServerProviderType == ProviderType.Oracle
+                ? "drop table \"tabletest\""
+                : "drop table tabletest";
+            await serverProvider.ExecuteSqlRawAsync(dropTableTestCommand);
         }
 
         [Fact]
@@ -1185,6 +1201,10 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 var provider = HelperDatabase.GetSyncProvider(ServerProviderType, sqlServerRandomDatabaseName,
                     ServerProviderType == ProviderType.Sql || ServerProviderType == ProviderType.Postgres);
 
+                // Oracle requires the schema/user to be created by an admin first before EF can create tables
+                if (ServerProviderType == ProviderType.Oracle)
+                    await HelperDatabase.CreateDatabaseAsync(ServerProviderType, sqlServerRandomDatabaseName, true);
+
                 // Create database and schema on server side (+ seeding)
                 new AdventureWorksContext(provider, true).Database.EnsureCreated();
 
@@ -1885,8 +1905,11 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 await clientProvider.AddProductCategoryAsync();
 
                 // Generate an outdated situation
-                await HelperDatabase.ExecuteScriptAsync(clientProviderType, clientDatabaseName,
-                                    $"Update scope_info_client set scope_last_server_sync_timestamp=-1");
+                // Oracle stores the DMS scope tables as quoted lower-case identifiers, so the raw script must quote them
+                var outdatedScript = clientProviderType == ProviderType.Oracle
+                    ? "Update \"scope_info_client\" set \"scope_last_server_sync_timestamp\"=-1"
+                    : "Update scope_info_client set scope_last_server_sync_timestamp=-1";
+                await HelperDatabase.ExecuteScriptAsync(clientProviderType, clientDatabaseName, outdatedScript);
 
                 // Making a first sync, will initialize everything we need
                 var se = await Assert.ThrowsAsync<SyncException>(async () =>
