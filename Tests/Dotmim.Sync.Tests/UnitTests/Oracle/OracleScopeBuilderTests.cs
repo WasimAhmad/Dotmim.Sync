@@ -234,7 +234,8 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
                 .Cast<Match>()
                 .Select(m => h.Substring(int.Parse(m.Groups[1].Value) - 1, int.Parse(m.Groups[2].Value)))); // SQL SUBSTR is 1-based
 
-            var expectedHex = Convert.ToHexString(guid.ToByteArray());
+            // BitConverter instead of Convert.ToHexString: the test project also targets netcoreapp3.1
+            var expectedHex = BitConverter.ToString(guid.ToByteArray()).Replace("-", "");
             Assert.Equal(expectedHex, rawHex, ignoreCase: true);
         }
 
