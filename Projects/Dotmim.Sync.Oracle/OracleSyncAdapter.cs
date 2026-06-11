@@ -91,6 +91,19 @@ namespace Dotmim.Sync.Oracle
 
             this.SetCommandParameters(commandType, command, filter);
 
+            switch (commandType)
+            {
+                // Reader-producing commands: wrap so RAW(16) Guid columns are read back as
+                // Guid instead of byte[16] (a byte[] becomes base64 in the batch files, which
+                // does not deserialize back into a Guid — see OracleGuidConvertingCommand).
+                case DbCommandType.SelectChanges:
+                case DbCommandType.SelectChangesWithFilters:
+                case DbCommandType.SelectInitializedChanges:
+                case DbCommandType.SelectInitializedChangesWithFilters:
+                case DbCommandType.SelectRow:
+                    return (new OracleGuidConvertingCommand(command, this.TableDescription), false);
+            }
+
             return (command, false);
         }
 

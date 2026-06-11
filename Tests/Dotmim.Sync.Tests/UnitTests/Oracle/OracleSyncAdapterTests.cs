@@ -257,5 +257,145 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
             adapter.AddCommandParameterValue(context, isActive, "0", command, DbCommandType.UpdateRow);
             Assert.Equal(0, isActive.Value);
         }
+
+        [Theory]
+        [InlineData(DbCommandType.SelectChanges, true)]
+        [InlineData(DbCommandType.SelectInitializedChanges, true)]
+        [InlineData(DbCommandType.SelectRow, true)]
+        [InlineData(DbCommandType.UpdateRow, false)]
+        [InlineData(DbCommandType.DeleteRow, false)]
+        public void GetCommand_WrapsReaderProducingCommandsForGuidConversion(DbCommandType commandType, bool expectWrapped)
+        {
+            // RAW(16) comes back from ODP.NET as byte[16]; the batch serializer writes byte[]
+            // as base64 which cannot be deserialized into a Guid (silently null PK on apply).
+            // Select commands must therefore read Guid columns back as Guid.
+            var (adapter, context) = BuildAdapter();
+            var (command, _) = adapter.GetCommand(context, commandType, null);
+
+            Assert.Equal(expectWrapped, command is OracleGuidConvertingCommand);
+        }
+
+        [Fact]
+        public void GuidConvertingDataReader_ConvertsRaw16ToGuid_OnlyForGuidSchemaColumns()
+        {
+            var table = new SyncTable("Product");
+            table.Columns.Add(new SyncColumn("ProductId", typeof(Guid)));
+            table.Columns.Add(new SyncColumn("Name", typeof(string)));
+            table.Columns.Add(new SyncColumn("Photo", typeof(byte[])));
+
+            var guid = Guid.NewGuid();
+            var photo = new byte[16]; // 16-byte value on a NON-Guid column must stay byte[]
+            photo[0] = 42;
+
+            var stub = new StubDataReader(
+                new[] { "ProductId", "Name", "Photo", "sync_row_is_tombstone" },
+                new object[] { guid.ToByteArray(), "HL Handlebars", photo, 0L });
+
+            using var reader = new OracleGuidConvertingDataReader(stub, table);
+
+            Assert.True(reader.Read());
+
+            // Guid column: byte[16] -> Guid (storage order is Guid.ToByteArray order)
+            Assert.Equal(guid, reader.GetValue(0));
+            Assert.Equal(typeof(Guid), reader.GetFieldType(0));
+            Assert.Equal(guid, reader.GetGuid(0));
+
+            // non-Guid columns and out-of-schema columns are untouched
+            Assert.Equal("HL Handlebars", reader.GetValue(1));
+            Assert.Same(photo, reader.GetValue(2));
+            Assert.Equal(0L, reader.GetValue(3));
+
+            // GetValues applies the same conversion in place
+            var values = new object[4];
+            Assert.Equal(4, reader.GetValues(values));
+            Assert.Equal(guid, values[0]);
+            Assert.Same(photo, values[2]);
+        }
+
+        private sealed class StubDataReader : DbDataReader
+        {
+            private readonly string[] names;
+            private readonly object[] row;
+            private bool read;
+
+            public StubDataReader(string[] names, object[] row)
+            {
+                this.names = names;
+                this.row = row;
+            }
+
+            public override int FieldCount => this.names.Length;
+
+            public override object this[int ordinal] => this.row[ordinal];
+
+            public override object this[string name] => this.row[this.GetOrdinal(name)];
+
+            public override int Depth => 0;
+
+            public override bool HasRows => true;
+
+            public override bool IsClosed => false;
+
+            public override int RecordsAffected => -1;
+
+            public override bool Read()
+            {
+                if (this.read)
+                    return false;
+                this.read = true;
+                return true;
+            }
+
+            public override object GetValue(int ordinal) => this.row[ordinal];
+
+            public override int GetValues(object[] values)
+            {
+                var count = Math.Min(values.Length, this.row.Length);
+                Array.Copy(this.row, values, count);
+                return count;
+            }
+
+            public override string GetName(int ordinal) => this.names[ordinal];
+
+            public override int GetOrdinal(string name) => Array.IndexOf(this.names, name);
+
+            public override Type GetFieldType(int ordinal) => this.row[ordinal]?.GetType() ?? typeof(object);
+
+            public override bool IsDBNull(int ordinal) => this.row[ordinal] == null || this.row[ordinal] == DBNull.Value;
+
+            public override bool NextResult() => false;
+
+            public override bool GetBoolean(int ordinal) => (bool)this.row[ordinal];
+
+            public override byte GetByte(int ordinal) => (byte)this.row[ordinal];
+
+            public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length) => throw new NotSupportedException();
+
+            public override char GetChar(int ordinal) => (char)this.row[ordinal];
+
+            public override long GetChars(int ordinal, long dataOffset, char[] buffer, int bufferOffset, int length) => throw new NotSupportedException();
+
+            public override string GetDataTypeName(int ordinal) => this.GetFieldType(ordinal).Name;
+
+            public override DateTime GetDateTime(int ordinal) => (DateTime)this.row[ordinal];
+
+            public override decimal GetDecimal(int ordinal) => (decimal)this.row[ordinal];
+
+            public override double GetDouble(int ordinal) => (double)this.row[ordinal];
+
+            public override float GetFloat(int ordinal) => (float)this.row[ordinal];
+
+            public override Guid GetGuid(int ordinal) => (Guid)this.row[ordinal];
+
+            public override short GetInt16(int ordinal) => (short)this.row[ordinal];
+
+            public override int GetInt32(int ordinal) => (int)this.row[ordinal];
+
+            public override long GetInt64(int ordinal) => (long)this.row[ordinal];
+
+            public override string GetString(int ordinal) => (string)this.row[ordinal];
+
+            public override System.Collections.IEnumerator GetEnumerator() => this.row.GetEnumerator();
+        }
     }
 }
