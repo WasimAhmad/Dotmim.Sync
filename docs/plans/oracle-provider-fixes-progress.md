@@ -24,17 +24,38 @@ Update this file as each task lands: set status, add the commit hash, note any d
 | 13 | CI: template docker step, `azure-pipelines-oracle.yml`, nuget pack | I4 | ✅ done (controller-verified) | `543a63af` | gvenzl/oracle-free:23-slim with readiness wait; 4 test jobs; Oracle pack added to BOTH Beta and Release nuget jobs matching sibling conventions; yaml parse-validated. |
 | 14 | `Samples/HelloOracleSync` | I5 | ✅ done | `c4489a9b` | net8.0 console, SqlServer server → Oracle client; builds clean. |
 | 15 | `docs/Oracle.md` + verification report status note | I6 | ✅ done | `1cd8b187` | Includes all review-discovered behavior notes (NOVALIDATE persistence, join-filter delete parity, DISTINCT+CLOB, interceptor wrapper, COMPATIBLE 12.2, overwrite recovery, schema-local rename). |
-| 16 | Live-database validation (gvenzl/oracle-free; Tcp → Conflicts → Filter → Http) | gate | ☐ not started | | requires Docker/Oracle |
+| 16 | Live-database validation (Oracle Free 26ai @ localhost:1521/FREEPDB1; Tcp → Conflicts → Filter → Http) | gate | ✅ done | `54329ec8..dac74fd1`, `669f04fa` | 4 debug-loop passes; 11 harness fixes + 6 provider fixes, all live-proven. See findings table below. |
 
 ## Deferred by design
 
 - **I7 — `UpdateMetadata`/`SelectMetadata` inline SQL:** intentionally not implemented; the MySQL provider ships without them (`MySqlSyncAdapter.cs:174-177`). Documented in `docs/Oracle.md` known limitations.
 
-## Live-validation findings (fill during Task 16)
+## Live-validation findings (Task 16 — Oracle Database Free 26ai 23.26, ODP.NET 3.21)
 
-| Test class | Result | Defects found / fixed |
+| Test class | Result | Notes |
 |---|---|---|
-| OracleTcpTests | | |
-| OracleConflictTests | | |
-| OracleTcpFilterTests | | |
-| OracleHttpTests | | |
+| OracleTcpTests | **101/101** | 87 on first full run; 14 fixed and re-verified 15/15 |
+| OracleConflictTests | **54/56** | 2 residuals are a Core/Windows file-lock (`InternalApplyCleanErrorsAsync` deletes an open errors-batch file — passes on Linux CI; spawned follow-up task `task_dec99e82`) |
+| OracleTcpFilterTests | **28/28** | full filter surface (joins, precedence, Guid binds) |
+| OracleHttpTests | **87/87** | HTTP transport + JSON round-trips incl. 20KB BLOBs |
+| Oracle unit suite | **67/67** | grew from 47 with live-fix regression tests |
+
+**Provider defects found ONLY by live testing (all fixed + unit-tested):**
+- `6fc0f4e2` — N-string types (NVARCHAR2/NCHAR/NCLOB) collapsed to VARCHAR2 in generated DDL → ORA-12704 charset mismatch between tracking PK and base columns.
+- `a0c8b8a9` — RAW(16) Guid columns read back as `byte[16]` → base64 in batch JSON → silently null PKs on apply; select commands now wrap their readers (`OracleGuidConvertingCommand`).
+- `b5a7c51a` — virtual (computed) columns weren't flagged `IsCompute` → INSERT into generated column; now read from `USER_TAB_COLS` with `VIRTUAL_COLUMN`/`HIDDEN_COLUMN`.
+- `5d4cccbc` — builder commands not bind-by-name; `{{{...}}}` custom-where templates quoted the `base`/`side` aliases (unquoted aliases fold to uppercase → ORA-00904).
+- `4e5ea8a2` — `DUP_VAL_ON_INDEX` swallowed ALL unique violations as conflicts; non-PK unique violations now re-raise (framework error flows depend on it).
+- `669f04fa` — `UNION` in initialized-changes implies DISTINCT, which cannot compare LOBs (ORA-22848) → `UNION ALL` (branches are disjoint by construction). Would have broken initialization for every table with BLOB/CLOB.
+
+**Harness/EF findings (Oracle-guarded fixes):**
+- EF inlines >4K seed literals (ORA-01704) → `CatalogDescription` seeded null on Oracle (`54329ec8`).
+- EF 8.23 on 23ai maps bool → native BOOLEAN (unsupported by ODP.NET 3.21) → `UseOracleSQLCompatibility(DatabaseVersion19)` pin (`9ccfeb1b`); side effect byte[]→RAW(2000) → `ThumbNailPhoto` explicitly BLOB (`dac74fd1`).
+- Oracle identities don't advance past EF literal-seeded ids (ORA-00001 on first generated value) → `ResetOracleIdentitySequencesAsync` (START WITH LIMIT VALUE) after every EnsureCreated (`be42fed1`, `08923a88`).
+- Raw-DDL provider switches and inline server creation lacked Oracle arms (`ddba4205`, `55bdf8a0`).
+
+**Probes recorded:**
+- `CAST(TIMESTAMP '...44.999999' AS DATE)` → `:44` — **truncates**, confirming the clock formula's load-bearing assumption.
+- `sync_row_count` reads back as boxed `int` (dual-API rule holds under load).
+- Constraint Disable/Enable loops drive heavy `USER_CONSTRAINTS` dictionary churn (~72% DB CPU during apply) — future optimization: recommend `DisableConstraintsOnApplyChanges = false` on Oracle or cache constraint names.
+- ORA-17002: never observed; network drops surfaced as 3113/3135 family — the transient set stays as-is.

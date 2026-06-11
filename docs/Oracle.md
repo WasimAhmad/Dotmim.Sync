@@ -83,3 +83,10 @@ Connection strings used by the test suite live in `Tests/Dotmim.Sync.Tests/appse
   schema-local); the new-schema argument is ignored.
 - **Cross-schema filter joins** are emitted schema-unqualified (parity with the other
   providers); use synonyms or same-schema objects.
+- **EF Core on Oracle 23ai+**: pin `UseOracleSQLCompatibility` to a 19-level so `bool` maps
+  to `NUMBER(1)` (ODP.NET 3.x does not support the native BOOLEAN type), map large `byte[]`
+  properties to `BLOB` explicitly, and note that Oracle identity sequences do **not** advance
+  past EF-seeded literal ids — restart them (`START WITH LIMIT VALUE`) after seeding.
+- **Constraint toggling cost**: `DisableConstraints`/`EnableConstraints` query
+  `USER_CONSTRAINTS` per table per sync, which is dictionary-heavy on Oracle. For
+  FK-ordered setups consider `Options.DisableConstraintsOnApplyChanges = false`.
