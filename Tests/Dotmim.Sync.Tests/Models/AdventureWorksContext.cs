@@ -901,9 +901,10 @@ namespace Dotmim.Sync.Tests.Models
 
             );
 
-            modelBuilder.Entity<ProductModel>().HasData(
-                new ProductModel { ProductModelId = 6, Name = "HL Road Frame" },
-                new ProductModel { ProductModelId = 19, Name = "Mountain-100", CatalogDescription = @"
+            // Oracle limits SQL string literals to 4000 bytes and EF Core inlines seed data as literals,
+            // so these multi-KB XML catalog descriptions would fail with ORA-01704 (string literal too long).
+            // Seed NULL on Oracle only; all other providers keep the full XML.
+            string mountain100CatalogDescription = this.ProviderType == ProviderType.Oracle ? null : @"
                         <?xml-stylesheet href=""ProductDescription.xsl"" type=""text/xsl""?><p1:ProductDescription xmlns:p1=""http://schemas.microsoft.com/sqlserver/2004/07/adventure-works/ProductModelDescription"" xmlns:wm=""http://schemas.microsoft.com/sqlserver/2004/07/adventure-works/ProductModelWarrAndMain"" xmlns:wf=""http://www.adventure-works.com/schemas/OtherFeatures"" xmlns:html=""http://www.w3.org/1999/xhtml"" ProductModelID=""19"" ProductModelName=""Mountain 100""><p1:Summary><html:p>Our top-of-the-line competition mountain bike. 
                         Performance-enhancing options include the innovative HL Frame,
                         super-smooth front suspension, and traction for all terrain.
@@ -912,10 +913,9 @@ namespace Dotmim.Sync.Tests.Models
                         and wall-thickness required of a premium mountain frame.
                         The heat-treated welded aluminum frame has a larger diameter tube that absorbs the bumps.</wf:BikeFrame><wf:crankset> Triple crankset; alumunim crank arm; flawless shifting. </wf:crankset></p1:Features><!-- add one or more of these elements...one for each specific product in this product model --><p1:Picture><p1:Angle>front</p1:Angle><p1:Size>small</p1:Size><p1:ProductPhotoID>118</p1:ProductPhotoID></p1:Picture><!-- add any tags in <specifications> --><p1:Specifications> These are the product specifications.
                         <Material>Almuminum Alloy</Material><Color>Available in most colors</Color><ProductLine>Mountain bike</ProductLine><Style>Unisex</Style><RiderExperience>Advanced to Professional riders</RiderExperience></p1:Specifications></p1:ProductDescription>
-                " },
-                new ProductModel { ProductModelId = 20, Name = "Mountain-200" },
-                new ProductModel { ProductModelId = 21, Name = "Mountain-300" },
-                new ProductModel { ProductModelId = 25, Name = "Road-150", CatalogDescription = @"
+                ";
+
+            string road150CatalogDescription = this.ProviderType == ProviderType.Oracle ? null : @"
                         <?xml-stylesheet href=""ProductDescription.xsl"" type=""text/xsl""?><p1:ProductDescription xmlns:p1=""http://schemas.microsoft.com/sqlserver/2004/07/adventure-works/ProductModelDescription"" xmlns:wm=""http://schemas.microsoft.com/sqlserver/2004/07/adventure-works/ProductModelWarrAndMain"" xmlns:wf=""http://www.adventure-works.com/schemas/OtherFeatures"" xmlns:html=""http://www.w3.org/1999/xhtml"" ProductModelID=""25"" ProductModelName=""Road-150""><p1:Summary><html:p>This bike is ridden by race winners. Developed with the 
                         Adventure Works Cycles professional race team, it has a extremely light
                         heat-treated aluminum frame, and steering that allows precision control.
@@ -924,7 +924,14 @@ namespace Dotmim.Sync.Tests.Models
                         it is welded and heat-treated for strength.
                         Our innovative design results in maximum comfort and performance.</wf:BikeFrame></p1:Features><!-- add one or more of these elements...one for each specific product in this product model --><p1:Picture><p1:Angle>front</p1:Angle><p1:Size>small</p1:Size><p1:ProductPhotoID>126</p1:ProductPhotoID></p1:Picture><!-- add any tags in <specifications> --><p1:Specifications> These are the product specifications.
                         <Material>Aluminum</Material><Color>Available in all colors.</Color><ProductLine>Road bike</ProductLine><Style>Unisex</Style><RiderExperience>Intermediate to Professional riders</RiderExperience></p1:Specifications></p1:ProductDescription>
-                " },
+                ";
+
+            modelBuilder.Entity<ProductModel>().HasData(
+                new ProductModel { ProductModelId = 6, Name = "HL Road Frame" },
+                new ProductModel { ProductModelId = 19, Name = "Mountain-100", CatalogDescription = mountain100CatalogDescription },
+                new ProductModel { ProductModelId = 20, Name = "Mountain-200" },
+                new ProductModel { ProductModelId = 21, Name = "Mountain-300" },
+                new ProductModel { ProductModelId = 25, Name = "Road-150", CatalogDescription = road150CatalogDescription },
                 new ProductModel { ProductModelId = 30, Name = "Road-650" },
                 new ProductModel { ProductModelId = 52, Name = "LL Mountain Handlebars" },
                 new ProductModel { ProductModelId = 54, Name = "ML Mountain Handlebars" },
