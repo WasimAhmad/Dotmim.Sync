@@ -862,6 +862,12 @@ namespace Dotmim.Sync
                     foreach (var row in failedRows)
                         await localSerializerWriter.WriteRowToFileAsync(row, schemaChangesTable).ConfigureAwait(false);
 
+                    // Close the writer before deleting: it holds the errors batch file open, and on Windows
+                    // File.Delete throws IOException on an open file (on Linux the unlink silently succeeds
+                    // and the rewritten content vanishes with the handle). Closing here also writes the JSON
+                    // footer for kept files on every table iteration, not just the last one.
+                    await localSerializerWriter.CloseFileAsync().ConfigureAwait(false);
+
                     if (failedRows.Count <= 0 && File.Exists(lastSyncErrorsBpiFullPath))
                         File.Delete(lastSyncErrorsBpiFullPath);
 
