@@ -52,6 +52,10 @@ namespace Dotmim.Sync.SampleConsole
         public static string GetNpgsqlDatabaseConnectionString(string dbName) =>
             string.Format(configuration.GetSection("ConnectionStrings")["NpgsqlConnection"], dbName);
 
+        // In Oracle a "database" is a user/schema, so dbName maps to the Oracle user name
+        public static string GetOracleDatabaseConnectionString(string dbName) =>
+            string.Format(configuration.GetSection("ConnectionStrings")["OracleConnection"], dbName);
+
 
 
         /// <summary>

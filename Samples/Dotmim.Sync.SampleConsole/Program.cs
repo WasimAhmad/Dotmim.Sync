@@ -2,6 +2,7 @@
 using Dotmim.Sync.DatabaseStringParsers;
 using Dotmim.Sync.Enumerations;
 using Dotmim.Sync.MySql;
+using Dotmim.Sync.Oracle;
 using Dotmim.Sync.SampleConsole;
 using Dotmim.Sync.Sqlite;
 using Dotmim.Sync.SqlServer;
@@ -49,6 +50,7 @@ internal class Program
 
         // var serverProvider = new NpgsqlSyncProvider(DBHelper.GetNpgsqlDatabaseConnectionString("data"));
         // var serverProvider = new MariaDBSyncProvider(DBHelper.GetMariadbDatabaseConnectionString(ServerDbName));
+        // var serverProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_SERVER"));
         var serverProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(ServerDbName));
 
         var clientProvider = new SqliteSyncProvider(Path.GetRandomFileName().Replace(".", "").ToLowerInvariant() + ".db");
@@ -58,6 +60,7 @@ internal class Program
         // clientProvider.UseBulkOperations = false;
         // var clientProvider = new MariaDBSyncProvider(DBHelper.GetMariadbDatabaseConnectionString(clientDbName));
         // var clientProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(clientDbName));
+        // var clientProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_CLIENT"));
         var setup = new SyncSetup(OneTable);
 
         // options.Logger = new SyncLogger().AddDebug().SetMinimumLevel(LogLevel.Information);
@@ -87,6 +90,64 @@ internal class Program
         //await CheckProvisionTime();
         //await SyncHttpThroughKestrelAsync(clientProvider, serverProvider, setup, options);
         //await MMCAsync();
+        //await SynchronizeWithOracleAsync();
+    }
+
+    /// <summary>
+    /// Oracle example: SQL Server as server, Oracle as client (Oracle can be either side).
+    /// <para>
+    /// In Oracle a "database" is a user/schema. Create the client user once, as an admin,
+    /// before running this sample (connection string is in appsettings.json):
+    /// <code>
+    ///   CREATE USER DMS_CLIENT IDENTIFIED BY "Password12!";
+    ///   GRANT CONNECT, RESOURCE TO DMS_CLIENT;
+    ///   ALTER USER DMS_CLIENT QUOTA UNLIMITED ON USERS;
+    /// </code>
+    /// A local Oracle is one docker command away:
+    /// docker run --name oracle -e ORACLE_PASSWORD=Password12! -p 1521:1521 -d gvenzl/oracle-free:23-slim
+    /// </para>
+    /// <para>
+    /// The Oracle provider creates and looks up every object quoted (case-preserved).
+    /// Tables created unquoted in Oracle are stored UPPERCASE and must be referenced with
+    /// their uppercase names in the SyncSetup (e.g. "PRODUCT"). Synced tables coming from
+    /// SQL Server keep their original casing, like the AdventureWorks tables below.
+    /// </para>
+    /// </summary>
+    private static async Task SynchronizeWithOracleAsync()
+    {
+        var serverProvider = new SqlSyncProvider(DBHelper.GetDatabaseConnectionString(ServerDbName));
+        var clientProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_CLIENT"));
+
+        var setup = new SyncSetup(AllTables);
+        var options = new SyncOptions();
+
+        // Disable/EnableConstraints query the Oracle data dictionary per table per sync;
+        // with an FK-ordered setup like this one, skipping them is noticeably faster.
+        options.DisableConstraintsOnApplyChanges = false;
+
+        var progress = new SynchronousProgress<ProgressArgs>(s =>
+            Console.WriteLine($"{s.ProgressPercentage:p}:  " +
+            $"\t[{s?.Source?[..Math.Min(4, s.Source.Length)]}] {s.TypeName}: {s.Message}"));
+
+        var agent = new SyncAgent(clientProvider, serverProvider, options);
+
+        do
+        {
+            try
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                var s = await agent.SynchronizeAsync(setup, progress: progress);
+                Console.WriteLine(s);
+            }
+            catch (SyncException e)
+            {
+                Console.ResetColor();
+                Console.WriteLine(e.Message);
+            }
+
+            Console.WriteLine("--------------------");
+        }
+        while (Console.ReadKey().Key != ConsoleKey.Escape);
     }
 
     private static async Task SynchronizeAsync(CoreProvider clientProvider, CoreProvider serverProvider, SyncSetup setup, SyncOptions options, string scopeName = SyncOptions.DefaultScopeName)
