@@ -90,7 +90,7 @@ namespace Dotmim.Sync.Oracle
 
     /// <summary>
     /// Data reader that converts RAW(16) values to <see cref="Guid"/> for columns the sync
-    /// schema declares as Guid. The stored byte order is <see cref="Guid.ToByteArray"/> order
+    /// schema declares as Guid. The stored byte order is <see cref="Guid.ToByteArray()"/> order
     /// (the provider's write path guarantees it), which is exactly what <c>new Guid(byte[])</c>
     /// expects, so the conversion round-trips.
     /// </summary>

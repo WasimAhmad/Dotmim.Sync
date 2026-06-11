@@ -104,6 +104,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 // Columns
                 var columnsCommand = connection.CreateCommand();
                 columnsCommand.Transaction = transaction;
+
                 // USER_TAB_COLS (not USER_TAB_COLUMNS) exposes VIRTUAL_COLUMN; virtual (computed)
                 // columns must be flagged so they are excluded from sync DML on every side.
                 columnsCommand.CommandText = @"
