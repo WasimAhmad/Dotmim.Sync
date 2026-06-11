@@ -209,6 +209,7 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                     ProviderType.MySql => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.MariaDB => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.Postgres => $"ALTER TABLE \"{schema}\".\"{productCategoryTable.TableName}\" ADD \"Attribute With Space\" character varying(250) NULL;",
+                    ProviderType.Oracle => $"ALTER TABLE \"{productCategoryTable.TableName}\" ADD (\"Attribute With Space\" NVARCHAR2(250) NULL)",
                     _ => throw new NotImplementedException(),
                 };
 
@@ -316,6 +317,7 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                     ProviderType.MySql => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.MariaDB => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.Postgres => $"ALTER TABLE \"{schema}\".\"{productCategoryTable.TableName}\" ADD \"Attribute With Space\" character varying(250) NULL;",
+                    ProviderType.Oracle => $"ALTER TABLE \"{productCategoryTable.TableName}\" ADD (\"Attribute With Space\" NVARCHAR2(250) NULL)",
                     _ => throw new NotImplementedException(),
                 };
 
@@ -619,6 +621,7 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                     ProviderType.MySql => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.MariaDB => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.Postgres => $"ALTER TABLE \"{schema}\".\"{productCategoryTable.TableName}\" ADD \"Attribute With Space\" character varying(250) NULL;",
+                    ProviderType.Oracle => $"ALTER TABLE \"{productCategoryTable.TableName}\" ADD (\"Attribute With Space\" NVARCHAR2(250) NULL)",
 
                     _ => throw new NotImplementedException(),
                 };
@@ -721,6 +724,7 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                     ProviderType.MySql => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.MariaDB => $"ALTER TABLE `{productCategoryTable.TableName}` ADD `Attribute With Space` nvarchar(250) NULL;",
                     ProviderType.Postgres => $"ALTER TABLE \"{schema}\".\"{productCategoryTable.TableName}\" ADD \"Attribute With Space\" character varying(250) NULL;",
+                    ProviderType.Oracle => $"ALTER TABLE \"{productCategoryTable.TableName}\" ADD (\"Attribute With Space\" NVARCHAR2(250) NULL)",
 
                     _ => throw new NotImplementedException(),
                 };
@@ -855,6 +859,10 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 var clientDatabaseName = HelperDatabase.GetRandomName("cli_start_restored");
 
                 var newClientProvider = HelperDatabase.GetSyncProvider(clientProviderType, clientDatabaseName, clientProviderType == ProviderType.Sql || clientProviderType == ProviderType.Postgres);
+
+                // Oracle requires the schema/user to be created by an admin first before EF can create tables
+                if (clientProviderType == ProviderType.Oracle)
+                    await HelperDatabase.CreateDatabaseAsync(clientProviderType, clientDatabaseName, true);
 
                 new AdventureWorksContext(newClientProvider).Database.EnsureCreated();
                 if (clientProviderType == ProviderType.Sql)
