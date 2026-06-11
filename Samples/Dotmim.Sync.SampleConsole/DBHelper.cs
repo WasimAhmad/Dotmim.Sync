@@ -98,6 +98,225 @@ namespace Dotmim.Sync.SampleConsole
             }
         }
 
+        /// <summary>
+        /// Creates the Oracle user if needed, then creates and seeds the AdventureWorks-style
+        /// tables the sample uses. Oracle as SERVER needs its tables to already exist with
+        /// data — sync only creates tables on the CLIENT side, from the server schema.
+        /// Idempotent: tables that already exist are left untouched.
+        /// </summary>
+        public static async Task EnsureOracleAdventureWorksAsync(string dbName)
+        {
+            await CreateOracleDatabaseAsync(dbName);
+
+            using var connection = new OracleConnection(GetOracleDatabaseConnectionString(dbName));
+            await connection.OpenAsync();
+
+            foreach (var (tableName, statements) in GetOracleAdventureWorksScripts())
+            {
+                using var existsCommand = connection.CreateCommand();
+                existsCommand.CommandText = "SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = :tableName";
+                var tableNameParameter = existsCommand.CreateParameter();
+                tableNameParameter.ParameterName = ":tableName";
+                tableNameParameter.Value = tableName;
+                existsCommand.Parameters.Add(tableNameParameter);
+
+                if (Convert.ToInt32(await existsCommand.ExecuteScalarAsync()) > 0)
+                    continue;
+
+                foreach (var statement in statements)
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = statement;
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+        }
+
+        /// <summary>
+        /// DDL + seed statements per table, in FK-consistent order. Guids are stored as
+        /// RAW(16) in Guid.ToByteArray() order (HEXTORAW of the hex below), booleans as
+        /// NUMBER(1), large text as NCLOB, photos as BLOB — the type mapping documented
+        /// in docs/Oracle.md.
+        /// </summary>
+        private static IEnumerable<(string TableName, string[] Statements)> GetOracleAdventureWorksScripts()
+        {
+            static string NewRawGuid() => Convert.ToHexString(Guid.NewGuid().ToByteArray());
+
+            string product1 = NewRawGuid(), product2 = NewRawGuid(), product3 = NewRawGuid();
+            string customer1 = NewRawGuid(), customer2 = NewRawGuid();
+
+            yield return ("ProductCategory", new[]
+            {
+                """
+                CREATE TABLE "ProductCategory" (
+                  "ProductCategoryID" NVARCHAR2(12) NOT NULL,
+                  "ParentProductCategoryID" NVARCHAR2(12) NULL,
+                  "Name" NVARCHAR2(50) NOT NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_ProductCategory" PRIMARY KEY ("ProductCategoryID"))
+                """,
+                $"""INSERT INTO "ProductCategory" ("ProductCategoryID", "Name", "rowguid", "ModifiedDate") VALUES ('A_BIKES', 'Bikes', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "ProductCategory" ("ProductCategoryID", "ParentProductCategoryID", "Name", "rowguid", "ModifiedDate") VALUES ('MOUNTB', 'A_BIKES', 'Mountain Bikes', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "ProductCategory" ("ProductCategoryID", "ParentProductCategoryID", "Name", "rowguid", "ModifiedDate") VALUES ('ROADB', 'A_BIKES', 'Road Bikes', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "ProductCategory" ("ProductCategoryID", "Name", "rowguid", "ModifiedDate") VALUES ('ROADFR', 'Road Frames', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "ProductCategory" ("ProductCategoryID", "Name", "rowguid", "ModifiedDate") VALUES ('HANDLB', 'Handlebars', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("ProductModel", new[]
+            {
+                """
+                CREATE TABLE "ProductModel" (
+                  "ProductModelID" NUMBER(10) NOT NULL,
+                  "Name" NVARCHAR2(50) NOT NULL,
+                  "CatalogDescription" NCLOB NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_ProductModel" PRIMARY KEY ("ProductModelID"))
+                """,
+                $"""INSERT INTO "ProductModel" ("ProductModelID", "Name", "rowguid", "ModifiedDate") VALUES (6, 'HL Road Frame', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "ProductModel" ("ProductModelID", "Name", "rowguid", "ModifiedDate") VALUES (19, 'Mountain-100', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("Product", new[]
+            {
+                """
+                CREATE TABLE "Product" (
+                  "ProductID" RAW(16) NOT NULL,
+                  "Name" NVARCHAR2(50) NOT NULL,
+                  "ProductNumber" NVARCHAR2(25) NOT NULL,
+                  "Color" NVARCHAR2(15) NULL,
+                  "StandardCost" NUMBER(19,4) NOT NULL,
+                  "ListPrice" NUMBER(19,4) NOT NULL,
+                  "Size" NVARCHAR2(5) NULL,
+                  "Weight" NUMBER(8,2) NULL,
+                  "ProductCategoryID" NVARCHAR2(12) NULL,
+                  "ProductModelID" NUMBER(10) NULL,
+                  "SellStartDate" TIMESTAMP NULL,
+                  "SellEndDate" TIMESTAMP NULL,
+                  "DiscontinuedDate" TIMESTAMP NULL,
+                  "ThumbNailPhoto" BLOB NULL,
+                  "ThumbnailPhotoFileName" NVARCHAR2(50) NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_Product" PRIMARY KEY ("ProductID"))
+                """,
+                $"""INSERT INTO "Product" ("ProductID", "Name", "ProductNumber", "Color", "StandardCost", "ListPrice", "Size", "ProductCategoryID", "ProductModelID", "SellStartDate", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{product1}'), 'HL Road Frame - Red, 58', 'FR-R92R-58', 'Red', 1059.31, 1431.50, '58', 'ROADFR', 6, SYSTIMESTAMP, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "Product" ("ProductID", "Name", "ProductNumber", "Color", "StandardCost", "ListPrice", "Size", "ProductCategoryID", "ProductModelID", "SellStartDate", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{product2}'), 'Mountain-100 Silver, 38', 'BK-M82S-38', 'Silver', 1912.15, 3399.99, '38', 'MOUNTB', 19, SYSTIMESTAMP, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "Product" ("ProductID", "Name", "ProductNumber", "Color", "StandardCost", "ListPrice", "Size", "ProductCategoryID", "ProductModelID", "SellStartDate", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{product3}'), 'Road-150 Red, 62', 'BK-R93R-62', 'Red', 2171.29, 3578.27, '62', 'ROADB', 19, SYSTIMESTAMP, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("Address", new[]
+            {
+                """
+                CREATE TABLE "Address" (
+                  "AddressID" NUMBER(10) NOT NULL,
+                  "AddressLine1" NVARCHAR2(60) NOT NULL,
+                  "AddressLine2" NVARCHAR2(60) NULL,
+                  "City" NVARCHAR2(30) NOT NULL,
+                  "StateProvince" NVARCHAR2(50) NOT NULL,
+                  "CountryRegion" NVARCHAR2(50) NOT NULL,
+                  "PostalCode" NVARCHAR2(15) NOT NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_Address" PRIMARY KEY ("AddressID"))
+                """,
+                $"""INSERT INTO "Address" ("AddressID", "AddressLine1", "City", "StateProvince", "CountryRegion", "PostalCode", "rowguid", "ModifiedDate") VALUES (1, '8713 Yosemite Ct.', 'Bothell', 'Washington', 'United States', '98011', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "Address" ("AddressID", "AddressLine1", "City", "StateProvince", "CountryRegion", "PostalCode", "rowguid", "ModifiedDate") VALUES (2, '1318 Lasalle Street', 'Bothell', 'Washington', 'United States', '98011', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("Customer", new[]
+            {
+                """
+                CREATE TABLE "Customer" (
+                  "CustomerID" RAW(16) NOT NULL,
+                  "EmployeeID" NUMBER(10) NULL,
+                  "NameStyle" NUMBER(1) NOT NULL,
+                  "Title" NVARCHAR2(8) NULL,
+                  "FirstName" NVARCHAR2(50) NOT NULL,
+                  "MiddleName" NVARCHAR2(50) NULL,
+                  "LastName" NVARCHAR2(50) NOT NULL,
+                  "Suffix" NVARCHAR2(10) NULL,
+                  "CompanyName" NVARCHAR2(128) NULL,
+                  "SalesPerson" NVARCHAR2(256) NULL,
+                  "EmailAddress" NVARCHAR2(50) NULL,
+                  "Phone" NVARCHAR2(25) NULL,
+                  "PasswordHash" NVARCHAR2(128) NULL,
+                  "PasswordSalt" NVARCHAR2(10) NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_Customer" PRIMARY KEY ("CustomerID"))
+                """,
+                $"""INSERT INTO "Customer" ("CustomerID", "NameStyle", "Title", "FirstName", "LastName", "CompanyName", "EmailAddress", "Phone", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{customer1}'), 0, 'Mr.', 'Orlando', 'Gee', 'A Bike Store', 'orlando0@adventure-works.com', '245-555-0173', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "Customer" ("CustomerID", "NameStyle", "Title", "FirstName", "LastName", "CompanyName", "EmailAddress", "Phone", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{customer2}'), 0, 'Ms.', 'Keith', 'Harris', 'Progressive Sports', 'keith0@adventure-works.com', '170-555-0127', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("CustomerAddress", new[]
+            {
+                """
+                CREATE TABLE "CustomerAddress" (
+                  "CustomerID" RAW(16) NOT NULL,
+                  "AddressID" NUMBER(10) NOT NULL,
+                  "AddressType" NVARCHAR2(50) NOT NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_CustomerAddress" PRIMARY KEY ("CustomerID", "AddressID"))
+                """,
+                $"""INSERT INTO "CustomerAddress" ("CustomerID", "AddressID", "AddressType", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{customer1}'), 1, 'Main Office', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "CustomerAddress" ("CustomerID", "AddressID", "AddressType", "rowguid", "ModifiedDate") VALUES (HEXTORAW('{customer2}'), 2, 'Main Office', HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("SalesOrderHeader", new[]
+            {
+                """
+                CREATE TABLE "SalesOrderHeader" (
+                  "SalesOrderID" NUMBER(10) NOT NULL,
+                  "RevisionNumber" NUMBER(3) NOT NULL,
+                  "OrderDate" TIMESTAMP NULL,
+                  "DueDate" TIMESTAMP NULL,
+                  "ShipDate" TIMESTAMP NULL,
+                  "Status" NUMBER(3) NOT NULL,
+                  "OnlineOrderFlag" NUMBER(1) NULL,
+                  "SalesOrderNumber" NVARCHAR2(25) NULL,
+                  "PurchaseOrderNumber" NVARCHAR2(25) NULL,
+                  "AccountNumber" NVARCHAR2(15) NULL,
+                  "CustomerID" RAW(16) NOT NULL,
+                  "ShipToAddressID" NUMBER(10) NULL,
+                  "BillToAddressID" NUMBER(10) NULL,
+                  "ShipMethod" NVARCHAR2(50) NULL,
+                  "CreditCardApprovalCode" NVARCHAR2(15) NULL,
+                  "SubTotal" NUMBER(19,4) NOT NULL,
+                  "TaxAmt" NUMBER(19,4) NOT NULL,
+                  "Freight" NUMBER(19,4) NOT NULL,
+                  "TotalDue" NUMBER(19,4) NOT NULL,
+                  "Comment" NVARCHAR2(1000) NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_SalesOrderHeader" PRIMARY KEY ("SalesOrderID"))
+                """,
+                $"""INSERT INTO "SalesOrderHeader" ("SalesOrderID", "RevisionNumber", "OrderDate", "DueDate", "Status", "OnlineOrderFlag", "SalesOrderNumber", "AccountNumber", "CustomerID", "ShipToAddressID", "BillToAddressID", "ShipMethod", "SubTotal", "TaxAmt", "Freight", "TotalDue", "rowguid", "ModifiedDate") VALUES (71774, 2, SYSTIMESTAMP, SYSTIMESTAMP + 7, 5, 1, 'SO71774', '10-4020-000609', HEXTORAW('{customer1}'), 1, 1, 'CARGO TRANSPORT 5', 880.35, 70.43, 22.01, 972.79, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+
+            yield return ("SalesOrderDetail", new[]
+            {
+                """
+                CREATE TABLE "SalesOrderDetail" (
+                  "SalesOrderID" NUMBER(10) NOT NULL,
+                  "SalesOrderDetailID" NUMBER(10) NOT NULL,
+                  "OrderQty" NUMBER(5) NOT NULL,
+                  "ProductID" RAW(16) NOT NULL,
+                  "UnitPrice" NUMBER(19,4) NOT NULL,
+                  "UnitPriceDiscount" NUMBER(19,4) NOT NULL,
+                  "LineTotal" NUMBER(19,6) NULL,
+                  "rowguid" RAW(16) NULL,
+                  "ModifiedDate" TIMESTAMP NULL,
+                  CONSTRAINT "PK_SalesOrderDetail" PRIMARY KEY ("SalesOrderID", "SalesOrderDetailID"))
+                """,
+                $"""INSERT INTO "SalesOrderDetail" ("SalesOrderID", "SalesOrderDetailID", "OrderQty", "ProductID", "UnitPrice", "UnitPriceDiscount", "LineTotal", "rowguid", "ModifiedDate") VALUES (71774, 110562, 1, HEXTORAW('{product1}'), 356.90, 0, 356.90, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+                $"""INSERT INTO "SalesOrderDetail" ("SalesOrderID", "SalesOrderDetailID", "OrderQty", "ProductID", "UnitPrice", "UnitPriceDiscount", "LineTotal", "rowguid", "ModifiedDate") VALUES (71774, 110563, 2, HEXTORAW('{product2}'), 1391.99, 0, 2783.98, HEXTORAW('{NewRawGuid()}'), SYSTIMESTAMP)""",
+            });
+        }
+
 
 
         /// <summary>

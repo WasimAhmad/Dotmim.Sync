@@ -42,6 +42,15 @@ internal class Program
     public static string[] OneTable = new string[] { "ProductCategory" };
     public static string[] TwoTableS = new string[] { "ProductCategory", "ProductDescription" };
 
+    // the tables DBHelper.EnsureOracleAdventureWorksAsync creates and seeds
+    // (AllTables minus ProductDescription, which only exists in real AdventureWorksLT restores)
+    public static string[] OracleTables = new string[]
+    {
+        "ProductCategory", "ProductModel", "Product",
+        "Address", "Customer", "CustomerAddress",
+        "SalesOrderHeader", "SalesOrderDetail",
+    };
+
     private static async Task Main(string[] args)
     {
         //var serverProvider = new SqlSyncProvider(DBHelper.GetDatabaseConnectionString(ServerDbName));
@@ -51,9 +60,13 @@ internal class Program
         // var serverProvider = new NpgsqlSyncProvider(DBHelper.GetNpgsqlDatabaseConnectionString("data"));
         // var serverProvider = new MariaDBSyncProvider(DBHelper.GetMariadbDatabaseConnectionString(ServerDbName));
 
-        // Oracle has no auto-create: the user/schema must exist before connecting (ORA-01017 otherwise).
-        // CreateOracleDatabaseAsync creates it via the OracleAdminConnection if missing.
-        await DBHelper.CreateOracleDatabaseAsync("DMS_SERVER");
+        // Oracle has no auto-create: the user/schema must exist before connecting (ORA-01017 otherwise),
+        // and as a SERVER it must already contain the setup tables with data (sync only creates
+        // tables on the CLIENT side). EnsureOracleAdventureWorksAsync creates the user and
+        // creates + seeds the OracleTables set, idempotently.
+        // CAUTION: CreateOracleDatabaseAsync(..., recreateDb: true) does DROP USER CASCADE —
+        // it wipes ALL tables, data and sync scope state on every run.
+        await DBHelper.EnsureOracleAdventureWorksAsync("DMS_SERVER");
         var serverProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_SERVER"));
         //var serverProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(ServerDbName));
 
@@ -65,7 +78,7 @@ internal class Program
         // var clientProvider = new MariaDBSyncProvider(DBHelper.GetMariadbDatabaseConnectionString(clientDbName));
         // var clientProvider = new MySqlSyncProvider(DBHelper.GetMySqlDatabaseConnectionString(clientDbName));
         // var clientProvider = new OracleSyncProvider(DBHelper.GetOracleDatabaseConnectionString("DMS_CLIENT"));
-        var setup = new SyncSetup(OneTable);
+        var setup = new SyncSetup(OracleTables);
 
         // options.Logger = new SyncLogger().AddDebug().SetMinimumLevel(LogLevel.Information);
         // options.UseVerboseErrors = true;
