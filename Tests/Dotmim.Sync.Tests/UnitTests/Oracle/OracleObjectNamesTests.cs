@@ -156,6 +156,34 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         }
 
         [Fact]
+        public void UpdateRow_ReRaisesUniqueViolations_ThatAreNotPkCollisions()
+        {
+            var sql = BuildObjectNames().GetCommandText(DbCommandType.UpdateRow);
+
+            // DUP_VAL_ON_INDEX must NOT be swallowed unconditionally: only a PK collision
+            // is conflict semantics (v_count := 0); a violation on any other unique index
+            // must re-raise so the framework's error flows see a thrown exception
+            // (matches SqlServer MERGE / MySQL INSERT behavior).
+            Assert.DoesNotContain("WHEN DUP_VAL_ON_INDEX THEN v_count := 0; END;", sql);
+
+            var handlerIndex = sql.IndexOf("EXCEPTION WHEN DUP_VAL_ON_INDEX THEN", StringComparison.Ordinal);
+            Assert.True(handlerIndex >= 0, $"DUP_VAL_ON_INDEX handler missing:\n{sql}");
+
+            var handlerBody = sql.Substring(handlerIndex);
+            Assert.Contains("SELECT COUNT(*) INTO v_pk_exists FROM \"Product\"", handlerBody);
+            Assert.Contains("\"ProductId\" = :ProductId", handlerBody);
+            Assert.Contains("RAISE;", handlerBody);
+
+            // the pk-exists probe and the re-raise both live inside the handler,
+            // with the benign path (v_count := 0) gated on the PK row existing
+            var pkExistsCheck = handlerBody.IndexOf("IF v_pk_exists > 0 THEN", StringComparison.Ordinal);
+            var benignPath = handlerBody.IndexOf("v_count := 0;", StringComparison.Ordinal);
+            var reRaise = handlerBody.IndexOf("RAISE;", StringComparison.Ordinal);
+            Assert.True(pkExistsCheck >= 0 && pkExistsCheck < benignPath && benignPath < reRaise,
+                $"handler structure wrong:\n{handlerBody}");
+        }
+
+        [Fact]
         public void EnableConstraints_UsesNovalidate()
         {
             var sql = BuildObjectNames().GetCommandText(DbCommandType.EnableConstraints);

@@ -388,7 +388,21 @@ namespace Dotmim.Sync.Oracle.Builders
             sb.AppendLine($"{indent}  INSERT INTO {this.TableQuotedFullName} ({columnList})");
             sb.AppendLine($"{indent}  SELECT {valueList} FROM DUAL WHERE {guard};");
             sb.AppendLine($"{indent}  v_count := SQL%ROWCOUNT;");
-            sb.AppendLine($"{indent}EXCEPTION WHEN DUP_VAL_ON_INDEX THEN v_count := 0; END;");
+            sb.AppendLine($"{indent}EXCEPTION WHEN DUP_VAL_ON_INDEX THEN");
+            sb.AppendLine($"{indent}  -- a PK collision is conflict semantics (0 rows applied); a violation on any");
+            sb.AppendLine($"{indent}  -- other unique index is a real error and must surface to the framework");
+            sb.AppendLine($"{indent}  DECLARE");
+            sb.AppendLine($"{indent}    v_pk_exists NUMBER;");
+            sb.AppendLine($"{indent}  BEGIN");
+            sb.AppendLine($"{indent}    SELECT COUNT(*) INTO v_pk_exists FROM {this.TableQuotedFullName}");
+            sb.AppendLine($"{indent}    WHERE {this.PrimaryKeyWhere(string.Empty, ":")};");
+            sb.AppendLine($"{indent}    IF v_pk_exists > 0 THEN");
+            sb.AppendLine($"{indent}      v_count := 0;");
+            sb.AppendLine($"{indent}    ELSE");
+            sb.AppendLine($"{indent}      RAISE;");
+            sb.AppendLine($"{indent}    END IF;");
+            sb.AppendLine($"{indent}  END;");
+            sb.AppendLine($"{indent}END;");
         }
 
         private void AppendTrackingMerge(StringBuilder sb, int tombstone, string scopeBind, string indent)
