@@ -97,12 +97,24 @@ namespace Dotmim.Sync.Tests.Models
                         else
                             optionsBuilder.UseNpgsql(this.ConnectionString);
                         break;
-#if NET6_0 || NET8_0
+#if NET8_0
                     case ProviderType.Oracle:
+                        // Pin the SQL compatibility level so EF maps bool to NUMBER(1) instead of the
+                        // native BOOLEAN type introduced by Oracle 23ai. The sync provider binds bools
+                        // as NUMBER through ODP.NET 3.21, which predates BOOLEAN support.
                         if (this.Connection != null)
-                            optionsBuilder.UseOracle(this.Connection);
+                            optionsBuilder.UseOracle(this.Connection, options => options.UseOracleSQLCompatibility(OracleSQLCompatibility.DatabaseVersion19));
                         else
-                            optionsBuilder.UseOracle(this.ConnectionString);
+                            optionsBuilder.UseOracle(this.ConnectionString, options => options.UseOracleSQLCompatibility(OracleSQLCompatibility.DatabaseVersion19));
+                        break;
+#elif NET6_0
+                    case ProviderType.Oracle:
+                        // Oracle.EntityFrameworkCore 6.x takes the compatibility level as a string and
+                        // cannot emit native BOOLEAN columns; pin the default explicitly for parity.
+                        if (this.Connection != null)
+                            optionsBuilder.UseOracle(this.Connection, options => options.UseOracleSQLCompatibility("12"));
+                        else
+                            optionsBuilder.UseOracle(this.ConnectionString, options => options.UseOracleSQLCompatibility("12"));
                         break;
 #endif
                 }
