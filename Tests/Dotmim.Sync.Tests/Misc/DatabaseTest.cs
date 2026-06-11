@@ -211,6 +211,10 @@ namespace Dotmim.Sync.Tests.Misc
 
                 if (serverProviderType == ProviderType.Sql)
                     await HelperDatabase.ActivateChangeTracking(serverDatabaseName);
+
+                // Oracle identities do not advance past EF's literal-seeded ids
+                if (serverProviderType == ProviderType.Oracle)
+                    await HelperDatabase.ResetOracleIdentitySequencesAsync(serverDatabaseName);
             }
 
             foreach (var clientProvider in GetClientProviders())
@@ -226,6 +230,10 @@ namespace Dotmim.Sync.Tests.Misc
 
                 if (clientProviderType == ProviderType.Sql)
                     await HelperDatabase.ActivateChangeTracking(clientDatabaseName);
+
+                // Oracle identities do not advance past EF's literal-seeded ids
+                if (clientProviderType == ProviderType.Oracle)
+                    await HelperDatabase.ResetOracleIdentitySequencesAsync(clientDatabaseName);
             }
         }
 

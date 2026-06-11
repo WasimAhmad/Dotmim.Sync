@@ -666,6 +666,10 @@
 
             new AdventureWorksContext(coreProvider, seeding).Database.EnsureCreated();
 
+            // Oracle identities do not advance past EF's literal-seeded ids
+            if (t == ProviderType.Oracle)
+                await HelperDatabase.ResetOracleIdentitySequencesAsync(d);
+
             var localOrchestrator = new LocalOrchestrator(coreProvider);
             await using var c = coreProvider.CreateConnection();
             c.Open();

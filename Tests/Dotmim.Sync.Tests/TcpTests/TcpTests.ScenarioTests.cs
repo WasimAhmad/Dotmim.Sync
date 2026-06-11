@@ -865,6 +865,10 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                     await HelperDatabase.CreateDatabaseAsync(clientProviderType, clientDatabaseName, true);
 
                 new AdventureWorksContext(newClientProvider).Database.EnsureCreated();
+
+                // Oracle identities do not advance past EF's literal-seeded ids
+                if (clientProviderType == ProviderType.Oracle)
+                    await HelperDatabase.ResetOracleIdentitySequencesAsync(clientDatabaseName);
                 if (clientProviderType == ProviderType.Sql)
                 {
                     await HelperDatabase.ActivateChangeTracking(clientDatabaseName);

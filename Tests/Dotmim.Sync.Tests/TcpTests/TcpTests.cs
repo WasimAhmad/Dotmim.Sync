@@ -1208,6 +1208,10 @@ namespace Dotmim.Sync.Tests.IntegrationTests
                 // Create database and schema on server side (+ seeding)
                 new AdventureWorksContext(provider, true).Database.EnsureCreated();
 
+                // Oracle identities do not advance past EF's literal-seeded ids
+                if (ServerProviderType == ProviderType.Oracle)
+                    await HelperDatabase.ResetOracleIdentitySequencesAsync(sqlServerRandomDatabaseName);
+
                 if (ServerProviderType == ProviderType.Sql)
                     await HelperDatabase.ActivateChangeTracking(sqlServerRandomDatabaseName);
 
