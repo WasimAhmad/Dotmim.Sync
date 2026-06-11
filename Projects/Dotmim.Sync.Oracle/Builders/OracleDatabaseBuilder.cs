@@ -35,7 +35,7 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var setup = new SyncSetup();
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "SELECT TABLE_NAME FROM USER_TABLES ORDER BY TABLE_NAME";
 
@@ -62,12 +62,12 @@ namespace Dotmim.Sync.Oracle.Builders
         public override async Task<(string DatabaseName, string Version)> GetHelloAsync(DbConnection connection, DbTransaction transaction = null)
         {
             // "database" in this provider's model is the user/schema
-            var databaseNameCommand = connection.CreateCommand();
+            var databaseNameCommand = connection.CreateCommand().EnsureBindByName();
             databaseNameCommand.Transaction = transaction;
             databaseNameCommand.CommandText = "SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL";
 
             // PRODUCT_COMPONENT_VERSION is granted to PUBLIC, unlike V$VERSION
-            var versionCommand = connection.CreateCommand();
+            var versionCommand = connection.CreateCommand().EnsureBindByName();
             versionCommand.Transaction = transaction;
             versionCommand.CommandText = "SELECT VERSION FROM PRODUCT_COMPONENT_VERSION WHERE PRODUCT LIKE 'Oracle%' AND ROWNUM = 1";
 
@@ -102,7 +102,7 @@ namespace Dotmim.Sync.Oracle.Builders
                     await connection.OpenAsync().ConfigureAwait(false);
 
                 // Columns
-                var columnsCommand = connection.CreateCommand();
+                var columnsCommand = connection.CreateCommand().EnsureBindByName();
                 columnsCommand.Transaction = transaction;
 
                 // USER_TAB_COLS (not USER_TAB_COLUMNS) exposes VIRTUAL_COLUMN; virtual (computed)
@@ -140,7 +140,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 }
 
                 // Primary keys
-                var pkCommand = connection.CreateCommand();
+                var pkCommand = connection.CreateCommand().EnsureBindByName();
                 pkCommand.Transaction = transaction;
                 pkCommand.CommandText = @"
                     SELECT cols.COLUMN_NAME FROM USER_CONSTRAINTS cons
@@ -174,7 +174,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
             var parsedName = GetParsedTableName(tableName);
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
 
             if (string.IsNullOrEmpty(schemaName))
@@ -226,7 +226,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 ? $"\"{parsedName}\""
                 : $"\"{schemaName}\".\"{parsedName}\"";
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"DROP TABLE {qualifiedTableName}";
 
@@ -260,7 +260,7 @@ namespace Dotmim.Sync.Oracle.Builders
                 ? $"\"{parsedName}\""
                 : $"\"{schemaName}\".\"{parsedName}\"";
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
 
             // Oracle's RENAME TO renames within the owning schema; moving a table across

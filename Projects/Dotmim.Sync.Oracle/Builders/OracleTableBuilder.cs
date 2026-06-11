@@ -77,7 +77,7 @@ namespace Dotmim.Sync.Oracle.Builders
         public override Task<DbCommand> GetCreateSchemaCommandAsync(DbConnection connection, DbTransaction transaction)
         {
             // Oracle "schema" is a user; the provider does not create users. No-op.
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "BEGIN NULL; END;";
             return Task.FromResult(command);
@@ -86,7 +86,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetExistsSchemaCommandAsync(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "SELECT COUNT(*) FROM ALL_USERS WHERE USERNAME = :userName";
 
@@ -123,7 +123,7 @@ namespace Dotmim.Sync.Oracle.Builders
 
             stringBuilder.AppendLine(")");
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = stringBuilder.ToString();
             return Task.FromResult(command);
@@ -136,7 +136,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetDropTableCommandAsync(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"DROP TABLE {this.oracleObjectNames.TableQuotedFullName}";
             return Task.FromResult(command);
@@ -145,7 +145,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetExistsColumnCommandAsync(string columnName, DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "SELECT COUNT(*) FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :tableName AND COLUMN_NAME = :columnName";
 
@@ -171,7 +171,7 @@ namespace Dotmim.Sync.Oracle.Builders
             var columnType = GetOracleColumnTypeString(column);
             var nullable = column.AllowDBNull ? "NULL" : "NOT NULL";
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"ALTER TABLE {this.oracleObjectNames.TableQuotedFullName} ADD (\"{columnName}\" {columnType} {nullable})";
             return Task.FromResult(command);
@@ -180,7 +180,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetDropColumnCommandAsync(string columnName, DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"ALTER TABLE {this.oracleObjectNames.TableQuotedFullName} DROP COLUMN \"{columnName}\"";
             return Task.FromResult(command);
@@ -209,7 +209,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetCreateTrackingTableCommandAsync(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = this.oracleObjectNames.CreateTrackingTableScript(GetOracleColumnTypeString);
             return Task.FromResult(command);
@@ -218,7 +218,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetDropTrackingTableCommandAsync(DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"DROP TABLE {this.oracleObjectNames.TrackingTableQuotedFullName}";
             return Task.FromResult(command);
@@ -235,7 +235,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetExistsTriggerCommandAsync(DbTriggerType triggerType, DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "SELECT COUNT(*) FROM USER_TRIGGERS WHERE TRIGGER_NAME = :triggerName";
 
@@ -250,7 +250,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetCreateTriggerCommandAsync(DbTriggerType triggerType, DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = this.oracleObjectNames.CreateTriggerScript(triggerType);
             return Task.FromResult(command);
@@ -259,7 +259,7 @@ namespace Dotmim.Sync.Oracle.Builders
         /// <inheritdoc/>
         public override Task<DbCommand> GetDropTriggerCommandAsync(DbTriggerType triggerType, DbConnection connection, DbTransaction transaction)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = $"DROP TRIGGER \"{this.oracleObjectNames.GetTriggerCommandName(triggerType)}\"";
             return Task.FromResult(command);
@@ -274,7 +274,7 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var columns = new List<SyncColumn>();
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
 
             // USER_TAB_COLS (not USER_TAB_COLUMNS) exposes VIRTUAL_COLUMN; virtual (computed)
@@ -338,7 +338,7 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var primaryKeys = new List<SyncColumn>();
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = @"
                 SELECT cols.COLUMN_NAME
@@ -381,7 +381,7 @@ namespace Dotmim.Sync.Oracle.Builders
         {
             var relations = new List<DbRelationDefinition>();
 
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = @"
                 SELECT c.CONSTRAINT_NAME, c.TABLE_NAME, c.R_CONSTRAINT_NAME, rc.TABLE_NAME AS REFERENCED_TABLE_NAME
@@ -418,7 +418,7 @@ namespace Dotmim.Sync.Oracle.Builders
                         ReferenceTableName = fk.ReferencedTable,
                     };
 
-                    var columnsCommand = connection.CreateCommand();
+                    var columnsCommand = connection.CreateCommand().EnsureBindByName();
                     columnsCommand.Transaction = transaction;
                     columnsCommand.CommandText = @"
                         SELECT k.COLUMN_NAME, k.POSITION, r.COLUMN_NAME AS REFERENCED_COLUMN_NAME
@@ -468,7 +468,7 @@ namespace Dotmim.Sync.Oracle.Builders
         // ----------------------------------------------------------------------------------------
         private DbCommand CreateExistsTableCommand(DbConnection connection, DbTransaction transaction, string tableName)
         {
-            var command = connection.CreateCommand();
+            var command = connection.CreateCommand().EnsureBindByName();
             command.Transaction = transaction;
             command.CommandText = "SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = :tableName";
 

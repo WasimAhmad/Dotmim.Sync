@@ -625,6 +625,14 @@ namespace Dotmim.Sync.Oracle.Builders
             foreach (var customWhere in customWheres)
             {
                 var iteration = customWhere.Replace("{{{", "\"").Replace("}}}", "\"");
+
+                // The {{{...}}} template quotes every identifier, including the DMS table aliases
+                // ({{{side}}} / {{{base}}}). Our generated FROM clause declares those aliases
+                // UNQUOTED, and Oracle folds unquoted identifiers to upper case, so a quoted
+                // lower-case "side" would not resolve (ORA-00904). Fold the alias references back
+                // to their unquoted form; other providers are case-insensitive here, Oracle is not.
+                iteration = iteration.Replace("\"side\".", "side.").Replace("\"base\".", "base.");
+
                 sb.Append($"{and}{iteration}");
                 and = " AND ";
             }

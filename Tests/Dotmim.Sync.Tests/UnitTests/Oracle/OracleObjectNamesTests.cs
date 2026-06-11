@@ -125,6 +125,28 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         }
 
         [Fact]
+        public void SelectChangesWithFilters_CustomWhereTemplate_KeepsTableAliasesUnquoted()
+        {
+            var objectNames = BuildObjectNames();
+
+            var filter = new SyncFilter("Product");
+            filter.CustomWheres.Add("{{{ProductCategoryId}}} IS NOT NULL OR {{{side}}}.{{{sync_row_is_tombstone}}} = 1");
+
+            var sql = objectNames.GetCommandText(DbCommandType.SelectChangesWithFilters, filter);
+
+            // the {{{...}}} template quotes every identifier, including the {{{side}}}/{{{base}}}
+            // aliases — but the FROM clause declares those aliases UNQUOTED and Oracle folds
+            // unquoted identifiers to upper case, so a quoted lower-case "side" would not
+            // resolve (ORA-00904). The alias references must be folded back to unquoted form.
+            Assert.Contains("side.\"sync_row_is_tombstone\" = 1", sql);
+            Assert.DoesNotContain("\"side\".", sql);
+            Assert.DoesNotContain("\"base\".", sql);
+
+            // regular identifiers keep their provider quoting
+            Assert.Contains("\"ProductCategoryId\" IS NOT NULL", sql);
+        }
+
+        [Fact]
         public void TimestampValue_EvaluatesSystimestampExactlyOnce()
         {
             // seconds and fractional parts must come from ONE reading; two evaluations can
