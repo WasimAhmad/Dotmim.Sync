@@ -389,6 +389,11 @@ namespace Dotmim.Sync.Tests.Models
 
                 entity.HasKey(e => e.ProductId);
 
+                // Under Oracle SQLCompatibility 19 (pinned for bool -> NUMBER(1)),
+                // EF maps byte[] to RAW(2000); large photos need a real BLOB.
+                if (this.ProviderType == ProviderType.Oracle)
+                    entity.Property(e => e.ThumbNailPhoto).HasColumnType("BLOB");
+
                 entity.HasIndex(e => e.Name)
 #if NET6_0 || NET8_0 
                     .HasDatabaseName("AK_Product_Name")
