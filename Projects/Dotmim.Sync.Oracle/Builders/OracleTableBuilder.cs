@@ -479,8 +479,25 @@ namespace Dotmim.Sync.Oracle.Builders
         /// Maps a <see cref="SyncColumn"/> to an Oracle column type declaration, based on the managed
         /// <see cref="DbType"/> (works regardless of the source provider).
         /// </summary>
-        private static string GetOracleColumnTypeString(SyncColumn column)
+        internal static string GetOracleColumnTypeString(SyncColumn column)
         {
+            // When the schema was read from an Oracle database, national character types must be
+            // preserved exactly: a VARCHAR2 tracking-table PK column UNIONed against an NVARCHAR2
+            // base column makes the _changes query fail with ORA-12704 (character set mismatch).
+            // Oracle reports these names in uppercase; other providers use different names/casings
+            // (e.g. SQL Server "nvarchar"), so an ordinal match only triggers for Oracle-origin schemas.
+            switch (column.OriginalTypeName)
+            {
+                case "NVARCHAR2":
+                    return column.MaxLength > 0 && column.MaxLength <= 2000 ? $"NVARCHAR2({column.MaxLength})" : "NCLOB";
+                case "NCHAR":
+                    return column.MaxLength > 0 && column.MaxLength <= 1000 ? $"NCHAR({column.MaxLength})" : "NCHAR(1)";
+                case "NCLOB":
+                    return "NCLOB";
+                default:
+                    break;
+            }
+
             switch (column.GetDbType())
             {
                 case DbType.Boolean:

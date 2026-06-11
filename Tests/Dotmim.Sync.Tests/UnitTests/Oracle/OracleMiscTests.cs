@@ -33,5 +33,28 @@ namespace Dotmim.Sync.Tests.UnitTests.Oracle
         [InlineData("NUMBER", 0, typeof(decimal))]
         public void GetManagedType_MapsRaw16ToGuid(string oracleType, int dataLength, System.Type expected)
             => Assert.Equal(expected, Dotmim.Sync.Oracle.Builders.OracleTableBuilder.GetManagedType(oracleType, 0, 0, dataLength));
+
+        [Theory]
+        // Oracle-origin national character types are preserved exactly so the tracking-table PK
+        // matches the base column character set (ORA-12704 on the _changes UNION otherwise).
+        [InlineData("NVARCHAR2", 450, "NVARCHAR2(450)")]
+        [InlineData("NVARCHAR2", 0, "NCLOB")]
+        [InlineData("NVARCHAR2", 4000, "NCLOB")]
+        [InlineData("NCHAR", 10, "NCHAR(10)")]
+        [InlineData("NCLOB", 0, "NCLOB")]
+        // Non-Oracle origin names (different casing/name) keep the DbType-based mapping.
+        [InlineData("nvarchar", 450, "VARCHAR2(450)")]
+        [InlineData("nchar", 10, "VARCHAR2(10)")]
+        [InlineData(null, 50, "VARCHAR2(50)")]
+        public void GetOracleColumnTypeString_PreservesOracleNationalCharacterTypes(string originalTypeName, int maxLength, string expected)
+        {
+            var column = new SyncColumn("C", typeof(string))
+            {
+                OriginalTypeName = originalTypeName,
+                MaxLength = maxLength,
+            };
+
+            Assert.Equal(expected, Dotmim.Sync.Oracle.Builders.OracleTableBuilder.GetOracleColumnTypeString(column));
+        }
     }
 }
